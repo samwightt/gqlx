@@ -28,3 +28,10 @@ type TypeInfo struct {
 	Kind        string `json:"kind"`
 	Description string `json:"description,omitempty"`
 }
+
+type ReferenceInfo struct {
+	Location    string `json:"location"`              // e.g., "Query.user" or "Query.users.id"
+	Kind        string `json:"kind"`                  // "field" or "argument"
+	Type        string `json:"type"`                  // The full type string e.g., "User!" or "[User!]!"
+	Description string `json:"description,omitempty"` // Description of the field or argument
+}

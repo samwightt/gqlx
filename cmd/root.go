@@ -114,6 +114,9 @@ func ResetFlags() {
 	// values command flags
 	valuesDeprecatedFilter = false
 	valuesHasDescriptionFilter = false
+	// references command flags
+	refsKindFilter = ""
+	refsInTypeFilter = ""
 }
 
 // ExecuteWithArgs runs the CLI with the given arguments and returns stdout, stderr, and any error.
