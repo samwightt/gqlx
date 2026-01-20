@@ -48,9 +48,40 @@ func Execute() {
 	}
 }
 
+// ResetFlags resets command-specific flags to their default values.
+// This is useful for testing to avoid state leaking between tests.
+func ResetFlags() {
+	// types command flags
+	implementsFilter = ""
+	hasFieldFilter = nil
+	kindFilter = nil
+	usedByFilter = ""
+	// fields command flags
+	deprecatedFilter = false
+	hasArgFilter = nil
+	returnsFilter = ""
+	requiredFilter = false
+	nullableFilter = false
+	// args command flags
+	argsDeprecatedFilter = false
+	argsTypeFilter = ""
+	argsRequiredFilter = false
+	argsNullableFilter = false
+	// paths command flags
+	pathsMaxDepth = 5
+	pathsFromType = ""
+	pathsShortestOnly = false
+	pathsThroughType = ""
+	// values command flags
+	valuesDeprecatedFilter = false
+}
+
 // ExecuteWithArgs runs the CLI with the given arguments and returns stdout, stderr, and any error.
 // This is useful for testing.
 func ExecuteWithArgs(args []string) (stdout string, stderr string, err error) {
+	// Reset command-specific flags to avoid state leaking between tests
+	ResetFlags()
+
 	stdoutBuf := new(bytes.Buffer)
 	stderrBuf := new(bytes.Buffer)
 

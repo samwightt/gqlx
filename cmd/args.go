@@ -1,0 +1,225 @@
+/*
+Copyright © 2026 NAME HERE <EMAIL ADDRESS>
+*/
+package cmd
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/samwightt/gqlx/pkg/render"
+	"github.com/spf13/cobra"
+	"github.com/vektah/gqlparser/v2/ast"
+)
+
+var argsDeprecatedFilter bool
+var argsTypeFilter string
+var argsRequiredFilter bool
+var argsNullableFilter bool
+
+func isArgDeprecated(arg *ast.ArgumentDefinition) bool {
+	return arg.Directives.ForName("deprecated") != nil
+}
+
+func matchesArgFilters(arg *ast.ArgumentDefinition) bool {
+	if argsTypeFilter != "" && getBaseTypeName(arg.Type) != argsTypeFilter {
+		return false
+	}
+	if argsRequiredFilter && !arg.Type.NonNull {
+		return false
+	}
+	if argsNullableFilter && arg.Type.NonNull {
+		return false
+	}
+	return true
+}
+
+func formatArgName(arg ArgInfo) string {
+	if arg.TypeName != "" && arg.FieldName != "" {
+		return fmt.Sprintf("%s.%s.%s", arg.TypeName, arg.FieldName, arg.Name)
+	}
+	return arg.Name
+}
+
+func formatArgText(arg ArgInfo) string {
+	name := formatArgName(arg)
+
+	typeStr := arg.Type
+	if arg.DefaultValue != "" {
+		typeStr += " = " + arg.DefaultValue
+	}
+
+	desc := ""
+	if arg.Description != "" {
+		desc = " # " + strings.ReplaceAll(arg.Description, "\n", " ")
+	}
+	return fmt.Sprintf("%s: %s%s", name, typeStr, desc)
+}
+
+func formatArgsPretty(args []ArgInfo) string {
+	t := makeTable()
+
+	for _, arg := range args {
+		name := formatArgName(arg)
+		typeStr := arg.Type
+		if arg.DefaultValue != "" {
+			typeStr += " = " + arg.DefaultValue
+		}
+		desc := strings.ReplaceAll(arg.Description, "\n", " ")
+		t.Row(name, typeStr, desc)
+	}
+	t.Headers("argument", "type", "description")
+
+	return t.String()
+}
+
+func argToInfo(arg *ast.ArgumentDefinition) ArgInfo {
+	var defaultValue string
+	if arg.DefaultValue != nil {
+		defaultValue = arg.DefaultValue.String()
+	}
+
+	return ArgInfo{
+		Name:         arg.Name,
+		Type:         typeToString(arg.Type),
+		DefaultValue: defaultValue,
+		Description:  arg.Description,
+	}
+}
+
+// argsCmd represents the args command
+var argsCmd = &cobra.Command{
+	Use:   "args [field]",
+	Short: "Lists arguments on fields.",
+	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		schema, err := loadSchema()
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveError
+		}
+
+		outputNames := []string{}
+		for _, typeDef := range schema.Types {
+			for _, field := range typeDef.Fields {
+				if len(field.Arguments) > 0 {
+					fieldName := fmt.Sprintf("%s.%s", typeDef.Name, field.Name)
+					if strings.Contains(strings.ToLower(fieldName), strings.ToLower(toComplete)) {
+						outputNames = append(outputNames, fieldName)
+					}
+				}
+			}
+		}
+
+		sort.Strings(outputNames)
+
+		return outputNames, cobra.ShellCompDirectiveNoFileComp
+	},
+	Args: cobra.MaximumNArgs(1),
+	Long: `Lists arguments on fields in the schema.
+
+If a field is specified (as Type.field), only arguments for that field are shown.
+If no field is specified, all arguments for all fields are shown.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if argsRequiredFilter && argsNullableFilter {
+			return fmt.Errorf("--required and --nullable cannot be used together")
+		}
+
+		schema, err := loadCliForSchema()
+		if err != nil {
+			return err
+		}
+
+		var argInfos []ArgInfo
+
+		if len(args) == 0 {
+			// List all arguments from all fields
+			for _, graphqlType := range schema.Types {
+				for _, field := range graphqlType.Fields {
+					for _, arg := range field.Arguments {
+						if argsDeprecatedFilter && !isArgDeprecated(arg) {
+							continue
+						}
+						if !matchesArgFilters(arg) {
+							continue
+						}
+						info := argToInfo(arg)
+						info.TypeName = graphqlType.Name
+						info.FieldName = field.Name
+						argInfos = append(argInfos, info)
+					}
+				}
+			}
+		} else {
+			// Parse Type.field format
+			fieldPath := args[0]
+			parts := strings.Split(fieldPath, ".")
+			if len(parts) != 2 {
+				return fmt.Errorf("field must be specified as Type.field (e.g., Query.user)")
+			}
+			typeName, fieldName := parts[0], parts[1]
+
+			graphqlType := schema.Types[typeName]
+			if graphqlType == nil {
+				var typeNames []string
+				for name := range schema.Types {
+					typeNames = append(typeNames, name)
+				}
+				if suggestion := findClosest(typeName, typeNames); suggestion != "" {
+					return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", typeName, suggestion)
+				}
+				return fmt.Errorf("type '%s' does not exist in schema", typeName)
+			}
+
+			var field *ast.FieldDefinition
+			for _, f := range graphqlType.Fields {
+				if f.Name == fieldName {
+					field = f
+					break
+				}
+			}
+
+			if field == nil {
+				var fieldNames []string
+				for _, f := range graphqlType.Fields {
+					fieldNames = append(fieldNames, f.Name)
+				}
+				if suggestion := findClosest(fieldName, fieldNames); suggestion != "" {
+					return fmt.Errorf("field '%s' does not exist on type '%s', did you mean '%s'?", fieldName, typeName, suggestion)
+				}
+				return fmt.Errorf("field '%s' does not exist on type '%s'", fieldName, typeName)
+			}
+
+			for _, arg := range field.Arguments {
+				if argsDeprecatedFilter && !isArgDeprecated(arg) {
+					continue
+				}
+				if !matchesArgFilters(arg) {
+					continue
+				}
+				argInfos = append(argInfos, argToInfo(arg))
+			}
+		}
+
+		renderer := render.Renderer[ArgInfo]{
+			Data:         argInfos,
+			TextFormat:   formatArgText,
+			PrettyFormat: formatArgsPretty,
+		}
+
+		output, err := renderer.Render(outputFormat)
+		if err != nil {
+			return fmt.Errorf("error rendering output: %w", err)
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), output)
+		return nil
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(argsCmd)
+
+	argsCmd.Flags().BoolVar(&argsDeprecatedFilter, "deprecated", false, "Filter to only show deprecated arguments")
+	argsCmd.Flags().StringVar(&argsTypeFilter, "type", "", "Filter to arguments of the given type")
+	argsCmd.Flags().BoolVar(&argsRequiredFilter, "required", false, "Filter to only show required (non-null) arguments")
+	argsCmd.Flags().BoolVar(&argsNullableFilter, "nullable", false, "Filter to only show nullable arguments")
+}

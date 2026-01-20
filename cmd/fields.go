@@ -98,8 +98,13 @@ func fieldToInfo(fieldDef *ast.FieldDefinition) FieldInfo {
 }
 
 func formatFieldName(field FieldInfo, format render.Format) string {
+	name := field.Name
+	if field.TypeName != "" {
+		name = field.TypeName + "." + field.Name
+	}
+
 	if len(field.Arguments) == 0 {
-		return field.Name
+		return name
 	}
 
 	var args []string
@@ -108,9 +113,9 @@ func formatFieldName(field FieldInfo, format render.Format) string {
 	}
 
 	if format == render.FormatPretty {
-		return fmt.Sprintf("%s(\n\t\t%s\n\t)", field.Name, strings.Join(args, ",\n\t\t"))
+		return fmt.Sprintf("%s(\n\t\t%s\n\t)", name, strings.Join(args, ",\n\t\t"))
 	}
-	return fmt.Sprintf("%s(%s)", field.Name, strings.Join(args, ", "))
+	return fmt.Sprintf("%s(%s)", name, strings.Join(args, ", "))
 }
 
 func formatFieldText(field FieldInfo) string {
@@ -145,10 +150,46 @@ func formatFieldsPretty(fields []FieldInfo) string {
 	return t.String()
 }
 
+var deprecatedFilter bool
+var hasArgFilter []string
+var returnsFilter string
+var requiredFilter bool
+var nullableFilter bool
+
+func isFieldDeprecated(field *ast.FieldDefinition) bool {
+	return field.Directives.ForName("deprecated") != nil
+}
+
+func getBaseTypeName(t *ast.Type) string {
+	if t.Elem != nil {
+		return getBaseTypeName(t.Elem)
+	}
+	return t.NamedType
+}
+
+func matchesHasArgFilter(field *ast.FieldDefinition) bool {
+	if len(hasArgFilter) == 0 {
+		return true
+	}
+	for _, argName := range hasArgFilter {
+		found := false
+		for _, arg := range field.Arguments {
+			if arg.Name == argName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 // fieldsCmd represents the fields command
 var fieldsCmd = &cobra.Command{
-	Use:   "fields [flags] ",
-	Short: "Lists fields on a type or input type.",
+	Use:   "fields [type]",
+	Short: "Lists fields on a type or across all types",
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		schema, err := loadSchema()
 		if err != nil {
@@ -166,36 +207,95 @@ var fieldsCmd = &cobra.Command{
 
 		return outputNames, cobra.ShellCompDirectiveNoFileComp
 	},
-	Args: cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
+	Args: cobra.MaximumNArgs(1),
+	Long: `Lists fields on a type or across all types with optional filtering.
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+If a type is specified, shows fields for that type only.
+If no type is specified, shows all fields prefixed with their type (User.id, Post.title, etc).
+
+Output formats:
+  text    "name: String! # Description", "id: ID!", etc. (default when piping)
+  json    [{"name": "id", "type": "ID!", "description": "..."}, ...]
+  pretty  Formatted table with columns (default in terminal)
+
+Multiple filters can be combined and are applied with AND logic.`,
+	Example: `  # See all fields on a type
+  gqlx fields User
+
+  # Find deprecated fields
+  gqlx fields --deprecated
+
+  # Find fields with pagination arguments that return a specific type
+  gqlx fields --has-arg first --has-arg after --returns User`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		searchString := args[0]
+		if requiredFilter && nullableFilter {
+			return fmt.Errorf("--required and --nullable cannot be used together")
+		}
 
 		schema, err := loadCliForSchema()
 		if err != nil {
 			return err
 		}
 
-		graphqlType := schema.Types[searchString]
-		if graphqlType == nil {
-			var typeNames []string
-			for name := range schema.Types {
-				typeNames = append(typeNames, name)
-			}
-			if suggestion := findClosest(searchString, typeNames); suggestion != "" {
-				return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", searchString, suggestion)
-			}
-			return fmt.Errorf("type '%s' does not exist in schema", searchString)
-		}
-
 		var fields []FieldInfo
-		for _, field := range graphqlType.Fields {
-			fields = append(fields, fieldToInfo(field))
+
+		if len(args) == 0 {
+			// List all fields from all types
+			for _, graphqlType := range schema.Types {
+				for _, field := range graphqlType.Fields {
+					if deprecatedFilter && !isFieldDeprecated(field) {
+						continue
+					}
+					if !matchesHasArgFilter(field) {
+						continue
+					}
+					if returnsFilter != "" && getBaseTypeName(field.Type) != returnsFilter {
+						continue
+					}
+					if requiredFilter && !field.Type.NonNull {
+						continue
+					}
+					if nullableFilter && field.Type.NonNull {
+						continue
+					}
+					info := fieldToInfo(field)
+					info.TypeName = graphqlType.Name
+					fields = append(fields, info)
+				}
+			}
+		} else {
+			// List fields from specific type
+			searchString := args[0]
+			graphqlType := schema.Types[searchString]
+			if graphqlType == nil {
+				var typeNames []string
+				for name := range schema.Types {
+					typeNames = append(typeNames, name)
+				}
+				if suggestion := findClosest(searchString, typeNames); suggestion != "" {
+					return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", searchString, suggestion)
+				}
+				return fmt.Errorf("type '%s' does not exist in schema", searchString)
+			}
+
+			for _, field := range graphqlType.Fields {
+				if deprecatedFilter && !isFieldDeprecated(field) {
+					continue
+				}
+				if !matchesHasArgFilter(field) {
+					continue
+				}
+				if returnsFilter != "" && getBaseTypeName(field.Type) != returnsFilter {
+					continue
+				}
+				if requiredFilter && !field.Type.NonNull {
+					continue
+				}
+				if nullableFilter && field.Type.NonNull {
+					continue
+				}
+				fields = append(fields, fieldToInfo(field))
+			}
 		}
 
 		renderer := render.Renderer[FieldInfo]{
@@ -216,13 +316,9 @@ to quickly create a Cobra application.`,
 func init() {
 	rootCmd.AddCommand(fieldsCmd)
 
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// fieldsCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// fieldsCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	fieldsCmd.Flags().BoolVar(&deprecatedFilter, "deprecated", false, "Filter to only show deprecated fields")
+	fieldsCmd.Flags().StringArrayVar(&hasArgFilter, "has-arg", nil, "Filter to fields that have the given argument (can be specified multiple times)")
+	fieldsCmd.Flags().StringVar(&returnsFilter, "returns", "", "Filter to fields that return the given type")
+	fieldsCmd.Flags().BoolVar(&requiredFilter, "required", false, "Filter to only show required (non-null) fields")
+	fieldsCmd.Flags().BoolVar(&nullableFilter, "nullable", false, "Filter to only show nullable fields")
 }
