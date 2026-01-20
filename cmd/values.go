@@ -14,6 +14,7 @@ import (
 )
 
 var valuesDeprecatedFilter bool
+var valuesHasDescriptionFilter bool
 
 type ValueInfo struct {
 	EnumName    string `json:"enumName,omitempty"`
@@ -100,6 +101,9 @@ If no enum is specified, all enum values for all enums are shown.`,
 					if valuesDeprecatedFilter && !isValueDeprecated(value) {
 						continue
 					}
+					if valuesHasDescriptionFilter && value.Description == "" {
+						continue
+					}
 					values = append(values, ValueInfo{
 						EnumName:    graphqlType.Name,
 						Name:        value.Name,
@@ -132,11 +136,18 @@ If no enum is specified, all enum values for all enums are shown.`,
 				if valuesDeprecatedFilter && !isValueDeprecated(value) {
 					continue
 				}
+				if valuesHasDescriptionFilter && value.Description == "" {
+					continue
+				}
 				values = append(values, ValueInfo{
 					Name:        value.Name,
 					Description: value.Description,
 				})
 			}
+		}
+
+		if len(values) == 0 {
+			fmt.Fprintln(cmd.ErrOrStderr(), "No values found that match the filters.")
 		}
 
 		renderer := render.Renderer[ValueInfo]{
@@ -158,4 +169,5 @@ func init() {
 	rootCmd.AddCommand(valuesCmd)
 
 	valuesCmd.Flags().BoolVar(&valuesDeprecatedFilter, "deprecated", false, "Filter to only show deprecated values")
+	valuesCmd.Flags().BoolVar(&valuesHasDescriptionFilter, "has-description", false, "Filter to only show values that have a description")
 }

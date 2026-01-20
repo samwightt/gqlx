@@ -21,9 +21,11 @@ It understands the syntax in .graphql files and lets you explore using GraphQL c
 what interfaces a type implements, what a field returns, whether arguments are required, etc.
 It's grep for GraphQL schema files.
 
-Commands usually output lists that are filtered by various flags. Check the help of each
-command to see what it supports. By default, gqlx tries to read ./schema.graphql in the
-working directory. A different schema file can be specified using -s.
+Commands usually output lists that are filtered by various flags. You should check the help of
+the command before using it, as there are lots of useful tools.
+
+By default, gqlx tries to read ./schema.graphql in the current directory.
+A different schema file can be specified using -s.
 
 Output can be formatted as pretty tables (default in terminals), plain text
 (default when piping), or JSON for integration with other tools.`,
@@ -78,17 +80,32 @@ func ResetFlags() {
 	usedByAnyFilter = nil
 	notUsedByFilter = nil
 	notUsedByAllFilter = nil
+	typesNameFilter = ""
+	typesNameRegexFilter = ""
+	typesHasDescriptionFilter = false
+	scalarFilter = false
+	typeFilter = false
+	interfaceFilter = false
+	unionFilter = false
+	enumFilter = false
+	inputFilter = false
 	// fields command flags
 	deprecatedFilter = false
 	hasArgFilter = nil
 	returnsFilter = ""
 	requiredFilter = false
 	nullableFilter = false
+	nameFilter = ""
+	nameRegexFilter = ""
+	hasDescriptionFilter = false
 	// args command flags
 	argsDeprecatedFilter = false
 	argsTypeFilter = ""
 	argsRequiredFilter = false
 	argsNullableFilter = false
+	argsNameFilter = ""
+	argsNameRegexFilter = ""
+	argsHasDescriptionFilter = false
 	// paths command flags
 	pathsMaxDepth = 5
 	pathsFromType = ""
@@ -96,6 +113,7 @@ func ResetFlags() {
 	pathsThroughType = ""
 	// values command flags
 	valuesDeprecatedFilter = false
+	valuesHasDescriptionFilter = false
 }
 
 // ExecuteWithArgs runs the CLI with the given arguments and returns stdout, stderr, and any error.

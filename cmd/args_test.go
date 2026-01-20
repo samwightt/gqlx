@@ -490,3 +490,131 @@ func TestArgs_CombinedFilters(t *testing.T) {
 	assert.NotContains(t, stdout, "query:")
 	assert.NotContains(t, stdout, "filter:")
 }
+
+func TestArgs_NameFilter_Glob(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type Query {
+			users(first: Int, after: String, last: Int, before: String, firstAfter: Int): [User!]!
+		}
+
+		type User {
+			id: ID!
+		}
+	`)
+
+	// Test glob pattern matching "first*"
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"args", "-s", schemaPath, "-f", "text", "--name", "first*", "Query.users"})
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout, "first: Int")
+	assert.Contains(t, stdout, "firstAfter: Int")
+	assert.NotContains(t, stdout, "after:")
+	assert.NotContains(t, stdout, "last:")
+	assert.NotContains(t, stdout, "before:")
+}
+
+func TestArgs_NameFilter_Regex(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type Query {
+			users(first: Int, after: String, last: Int, before: String): [User!]!
+		}
+
+		type User {
+			id: ID!
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"args", "-s", schemaPath, "-f", "text", "--name-regex", "^(first|last)$", "Query.users"})
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout, "first: Int")
+	assert.Contains(t, stdout, "last: Int")
+	assert.NotContains(t, stdout, "after:")
+	assert.NotContains(t, stdout, "before:")
+}
+
+func TestArgs_HasDescriptionFilter(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type Query {
+			users(
+				"Maximum number of results"
+				limit: Int,
+				offset: Int,
+				"Filter query string"
+				query: String
+			): [User!]!
+		}
+
+		type User {
+			id: ID!
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"args", "-s", schemaPath, "-f", "text", "--has-description", "Query.users"})
+	require.NoError(t, err)
+
+	// Should include arguments with descriptions
+	assert.Contains(t, stdout, "limit: Int")
+	assert.Contains(t, stdout, "query: String")
+
+	// Should NOT include arguments without descriptions
+	assert.NotContains(t, stdout, "offset:")
+}
+
+func TestArgs_HasDescriptionFilter_AllFields(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type Query {
+			user(
+				"The user ID"
+				id: ID!
+			): User
+			posts(limit: Int): [Post!]!
+		}
+
+		type User {
+			id: ID!
+			friends(
+				"Number of friends to return"
+				first: Int
+			): [User!]!
+		}
+
+		type Post {
+			id: ID!
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"args", "-s", schemaPath, "-f", "text", "--has-description"})
+	require.NoError(t, err)
+
+	// Should include arguments with descriptions
+	assert.Contains(t, stdout, "Query.user.id: ID!")
+	assert.Contains(t, stdout, "User.friends.first: Int")
+
+	// Should NOT include arguments without descriptions
+	assert.NotContains(t, stdout, "Query.posts.limit")
+}
+
+func TestArgs_HasDescriptionFilter_NoMatches(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type Query {
+			users(limit: Int, offset: Int): [User!]!
+		}
+
+		type User {
+			id: ID!
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"args", "-s", schemaPath, "-f", "json", "--has-description", "Query.users"})
+	require.NoError(t, err)
+
+	var args []struct {
+		Name string `json:"name"`
+	}
+
+	err = json.Unmarshal([]byte(stdout), &args)
+	require.NoError(t, err)
+
+	assert.Len(t, args, 0)
+}

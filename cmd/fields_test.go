@@ -771,3 +771,188 @@ func TestFields_RequiredAndNullable_MutuallyExclusive(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be used together")
 }
+
+func TestFields_NameFilter_Glob(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type User {
+			id: ID!
+			userId: ID!
+			name: String!
+			createdAt: String!
+			updatedAt: String!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	// Test glob ending with "Id"
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"fields", "-s", schemaPath, "-f", "text", "--name", "*Id", "User"})
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout, "userId: ID!")
+	assert.NotContains(t, stdout, "name:")
+	assert.NotContains(t, stdout, "createdAt:")
+
+	// Test glob ending with "At"
+	stdout, _, err = cmd.ExecuteWithArgs([]string{"fields", "-s", schemaPath, "-f", "text", "--name", "*At", "User"})
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout, "createdAt:")
+	assert.Contains(t, stdout, "updatedAt:")
+	assert.NotContains(t, stdout, "name:")
+	assert.NotContains(t, stdout, "userId:")
+}
+
+func TestFields_NameFilter_Regex(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type User {
+			id: ID!
+			userId: ID!
+			name: String!
+			createdAt: String!
+			updatedAt: String!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	// Test regex ending with "Id"
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"fields", "-s", schemaPath, "-f", "text", "--name-regex", "Id$", "User"})
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout, "userId: ID!")
+	assert.NotContains(t, stdout, "name:")
+	assert.NotContains(t, stdout, "createdAt:")
+}
+
+func TestFields_NameFilter_InvalidRegex(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type User {
+			id: ID!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	_, _, err := cmd.ExecuteWithArgs([]string{"fields", "-s", schemaPath, "-f", "text", "--name-regex", "[invalid", "User"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid regex")
+}
+
+func TestFields_HasDescriptionFilter(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type User {
+			"The unique identifier"
+			id: ID!
+			name: String!
+			"The user's email address"
+			email: String
+			age: Int
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"fields", "-s", schemaPath, "-f", "text", "--has-description", "User"})
+	require.NoError(t, err)
+
+	// Should include fields with descriptions
+	assert.Contains(t, stdout, "id: ID!")
+	assert.Contains(t, stdout, "email: String")
+
+	// Should NOT include fields without descriptions
+	assert.NotContains(t, stdout, "name:")
+	assert.NotContains(t, stdout, "age:")
+}
+
+func TestFields_HasDescriptionFilter_AllTypes(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type User {
+			"The unique identifier"
+			id: ID!
+			name: String!
+		}
+
+		type Post {
+			id: ID!
+			"The post title"
+			title: String!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"fields", "-s", schemaPath, "-f", "text", "--has-description"})
+	require.NoError(t, err)
+
+	// Should include fields with descriptions
+	assert.Contains(t, stdout, "User.id: ID!")
+	assert.Contains(t, stdout, "Post.title: String!")
+
+	// Should NOT include fields without descriptions
+	assert.NotContains(t, stdout, "User.name")
+	assert.NotContains(t, stdout, "Post.id:")
+}
+
+func TestFields_HasDescriptionFilter_NoMatches(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type User {
+			id: ID!
+			name: String!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"fields", "-s", schemaPath, "-f", "json", "--has-description", "User"})
+	require.NoError(t, err)
+
+	var fields []struct {
+		Name string `json:"name"`
+	}
+
+	err = json.Unmarshal([]byte(stdout), &fields)
+	require.NoError(t, err)
+
+	assert.Len(t, fields, 0)
+}
+
+func TestFields_HasDescriptionFilter_CombinedWithRequired(t *testing.T) {
+	schemaPath := writeTestSchema(t, `
+		type User {
+			"The unique identifier"
+			id: ID!
+			"The user's nickname"
+			nickname: String
+			name: String!
+			bio: String
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"fields", "-s", schemaPath, "-f", "text", "--has-description", "--required", "User"})
+	require.NoError(t, err)
+
+	// Should include required fields with descriptions
+	assert.Contains(t, stdout, "id: ID!")
+
+	// Should NOT include nullable fields or fields without descriptions
+	assert.NotContains(t, stdout, "nickname:")
+	assert.NotContains(t, stdout, "name:")
+	assert.NotContains(t, stdout, "bio:")
+}

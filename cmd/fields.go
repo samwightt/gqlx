@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -155,6 +156,9 @@ var hasArgFilter []string
 var returnsFilter string
 var requiredFilter bool
 var nullableFilter bool
+var nameFilter string
+var nameRegexFilter string
+var hasDescriptionFilter bool
 
 func isFieldDeprecated(field *ast.FieldDefinition) bool {
 	return field.Directives.ForName("deprecated") != nil
@@ -226,10 +230,28 @@ Multiple filters can be combined and are applied with AND logic.`,
   gqlx fields --deprecated
 
   # Find fields with pagination arguments that return a specific type
-  gqlx fields --has-arg first --has-arg after --returns User`,
+  gqlx fields --has-arg first --has-arg after --returns User
+
+  # Find fields ending in "Id"
+  gqlx fields --name "*Id"
+
+  # Find fields starting with "get"
+  gqlx fields --name "get*"
+
+  # Find fields matching a regex pattern
+  gqlx fields --name-regex "^(get|fetch)"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if requiredFilter && nullableFilter {
 			return fmt.Errorf("--required and --nullable cannot be used together")
+		}
+
+		var nameRegex *regexp.Regexp
+		if nameRegexFilter != "" {
+			var err error
+			nameRegex, err = regexp.Compile(nameRegexFilter)
+			if err != nil {
+				return fmt.Errorf("invalid regex pattern for --name-regex: %w", err)
+			}
 		}
 
 		schema, err := loadCliForSchema()
@@ -256,6 +278,18 @@ Multiple filters can be combined and are applied with AND logic.`,
 						continue
 					}
 					if nullableFilter && field.Type.NonNull {
+						continue
+					}
+					if hasDescriptionFilter && field.Description == "" {
+						continue
+					}
+					if nameFilter != "" {
+						matched, _ := filepath.Match(nameFilter, field.Name)
+						if !matched {
+							continue
+						}
+					}
+					if nameRegex != nil && !nameRegex.MatchString(field.Name) {
 						continue
 					}
 					info := fieldToInfo(field)
@@ -294,8 +328,24 @@ Multiple filters can be combined and are applied with AND logic.`,
 				if nullableFilter && field.Type.NonNull {
 					continue
 				}
+				if hasDescriptionFilter && field.Description == "" {
+					continue
+				}
+				if nameFilter != "" {
+					matched, _ := filepath.Match(nameFilter, field.Name)
+					if !matched {
+						continue
+					}
+				}
+				if nameRegex != nil && !nameRegex.MatchString(field.Name) {
+					continue
+				}
 				fields = append(fields, fieldToInfo(field))
 			}
+		}
+
+		if len(fields) == 0 {
+			fmt.Fprintln(cmd.ErrOrStderr(), "No fields found that match the filters.")
 		}
 
 		renderer := render.Renderer[FieldInfo]{
@@ -321,4 +371,7 @@ func init() {
 	fieldsCmd.Flags().StringVar(&returnsFilter, "returns", "", "Filter to fields that return the given type")
 	fieldsCmd.Flags().BoolVar(&requiredFilter, "required", false, "Filter to only show required (non-null) fields")
 	fieldsCmd.Flags().BoolVar(&nullableFilter, "nullable", false, "Filter to only show nullable fields")
+	fieldsCmd.Flags().StringVar(&nameFilter, "name", "", "Filter fields by name using a glob pattern (e.g., *Id, get*)")
+	fieldsCmd.Flags().StringVar(&nameRegexFilter, "name-regex", "", "Filter fields by name using a regex pattern")
+	fieldsCmd.Flags().BoolVar(&hasDescriptionFilter, "has-description", false, "Filter to only show fields that have a description")
 }

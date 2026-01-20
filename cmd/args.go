@@ -5,6 +5,8 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -17,6 +19,9 @@ var argsDeprecatedFilter bool
 var argsTypeFilter string
 var argsRequiredFilter bool
 var argsNullableFilter bool
+var argsNameFilter string
+var argsNameRegexFilter string
+var argsHasDescriptionFilter bool
 
 func isArgDeprecated(arg *ast.ArgumentDefinition) bool {
 	return arg.Directives.ForName("deprecated") != nil
@@ -30,6 +35,9 @@ func matchesArgFilters(arg *ast.ArgumentDefinition) bool {
 		return false
 	}
 	if argsNullableFilter && arg.Type.NonNull {
+		return false
+	}
+	if argsHasDescriptionFilter && arg.Description == "" {
 		return false
 	}
 	return true
@@ -124,6 +132,15 @@ If no field is specified, all arguments for all fields are shown.`,
 			return fmt.Errorf("--required and --nullable cannot be used together")
 		}
 
+		var argsNameRegex *regexp.Regexp
+		if argsNameRegexFilter != "" {
+			var err error
+			argsNameRegex, err = regexp.Compile(argsNameRegexFilter)
+			if err != nil {
+				return fmt.Errorf("invalid regex pattern for --name-regex: %w", err)
+			}
+		}
+
 		schema, err := loadCliForSchema()
 		if err != nil {
 			return err
@@ -140,6 +157,15 @@ If no field is specified, all arguments for all fields are shown.`,
 							continue
 						}
 						if !matchesArgFilters(arg) {
+							continue
+						}
+						if argsNameFilter != "" {
+							matched, _ := filepath.Match(argsNameFilter, arg.Name)
+							if !matched {
+								continue
+							}
+						}
+						if argsNameRegex != nil && !argsNameRegex.MatchString(arg.Name) {
 							continue
 						}
 						info := argToInfo(arg)
@@ -196,8 +222,21 @@ If no field is specified, all arguments for all fields are shown.`,
 				if !matchesArgFilters(arg) {
 					continue
 				}
+				if argsNameFilter != "" {
+					matched, _ := filepath.Match(argsNameFilter, arg.Name)
+					if !matched {
+						continue
+					}
+				}
+				if argsNameRegex != nil && !argsNameRegex.MatchString(arg.Name) {
+					continue
+				}
 				argInfos = append(argInfos, argToInfo(arg))
 			}
+		}
+
+		if len(argInfos) == 0 {
+			fmt.Fprintln(cmd.ErrOrStderr(), "No arguments found that match the filters.")
 		}
 
 		renderer := render.Renderer[ArgInfo]{
@@ -222,4 +261,7 @@ func init() {
 	argsCmd.Flags().StringVar(&argsTypeFilter, "type", "", "Filter to arguments of the given type")
 	argsCmd.Flags().BoolVar(&argsRequiredFilter, "required", false, "Filter to only show required (non-null) arguments")
 	argsCmd.Flags().BoolVar(&argsNullableFilter, "nullable", false, "Filter to only show nullable arguments")
+	argsCmd.Flags().StringVar(&argsNameFilter, "name", "", "Filter arguments by name using a glob pattern (e.g., *Id, first*)")
+	argsCmd.Flags().StringVar(&argsNameRegexFilter, "name-regex", "", "Filter arguments by name using a regex pattern")
+	argsCmd.Flags().BoolVar(&argsHasDescriptionFilter, "has-description", false, "Filter to only show arguments that have a description")
 }

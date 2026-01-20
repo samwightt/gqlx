@@ -5,6 +5,8 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -60,6 +62,15 @@ var usedByFilter []string
 var usedByAnyFilter []string
 var notUsedByFilter []string
 var notUsedByAllFilter []string
+var typesNameFilter string
+var typesNameRegexFilter string
+var typesHasDescriptionFilter bool
+var scalarFilter bool
+var typeFilter bool
+var interfaceFilter bool
+var unionFilter bool
+var enumFilter bool
+var inputFilter bool
 
 var validKinds = map[string]ast.DefinitionKind{
 	"scalar":    ast.Scalar,
@@ -72,16 +83,53 @@ var validKinds = map[string]ast.DefinitionKind{
 }
 
 func matchesKindFilter(t *ast.Definition) bool {
-	if len(kindFilter) == 0 {
-		return true
-	}
-	for _, k := range kindFilter {
-		if expectedKind, ok := validKinds[strings.ToLower(k)]; ok {
-			if t.Kind == expectedKind {
+	// Check individual kind flags first (OR logic between them)
+	hasIndividualFilter := scalarFilter || typeFilter || interfaceFilter || unionFilter || enumFilter || inputFilter
+	if hasIndividualFilter {
+		switch t.Kind {
+		case ast.Scalar:
+			if scalarFilter {
+				return true
+			}
+		case ast.Object:
+			if typeFilter {
+				return true
+			}
+		case ast.Interface:
+			if interfaceFilter {
+				return true
+			}
+		case ast.Union:
+			if unionFilter {
+				return true
+			}
+		case ast.Enum:
+			if enumFilter {
+				return true
+			}
+		case ast.InputObject:
+			if inputFilter {
 				return true
 			}
 		}
 	}
+
+	// Then check --kind flag
+	if len(kindFilter) > 0 {
+		for _, k := range kindFilter {
+			if expectedKind, ok := validKinds[strings.ToLower(k)]; ok {
+				if t.Kind == expectedKind {
+					return true
+				}
+			}
+		}
+	}
+
+	// If no filters specified, match everything
+	if !hasIndividualFilter && len(kindFilter) == 0 {
+		return true
+	}
+
 	return false
 }
 
@@ -176,10 +224,13 @@ Output formats:
 
 Multiple filters can be combined and are applied with AND logic.`,
 	Example: `  # Find all types that could be returned by the API
-  gqlx types --kind type --kind interface
+  gqlx types --type --interface
 
   # Find input types used by Query
-  gqlx types --kind input --used-by Query
+  gqlx types --input --used-by Query
+
+  # Find all enums
+  gqlx types --enum
 
   # Find types used by both Query AND Mutation
   gqlx types --used-by Query --used-by Mutation
@@ -193,9 +244,24 @@ Multiple filters can be combined and are applied with AND logic.`,
   # Find all node types for Relay-style pagination
   gqlx types --implements Node
 
+  # Find types ending in "Connection" (Relay pagination)
+  gqlx types --name "*Connection"
+
+  # Find types matching a regex pattern
+  gqlx types --name-regex "^(User|Post)"
+
   # Pipe to other tools
   gqlx types --kind type -f json | jq '.[].name'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		var typesNameRegex *regexp.Regexp
+		if typesNameRegexFilter != "" {
+			var err error
+			typesNameRegex, err = regexp.Compile(typesNameRegexFilter)
+			if err != nil {
+				return fmt.Errorf("invalid regex pattern for --name-regex: %w", err)
+			}
+		}
+
 		schema, err := loadCliForSchema()
 		if err != nil {
 			return err
@@ -325,11 +391,28 @@ Multiple filters can be combined and are applied with AND logic.`,
 				}
 			}
 
+			if typesHasDescriptionFilter && graphqlType.Description == "" {
+				continue
+			}
+			if typesNameFilter != "" {
+				matched, _ := filepath.Match(typesNameFilter, graphqlType.Name)
+				if !matched {
+					continue
+				}
+			}
+			if typesNameRegex != nil && !typesNameRegex.MatchString(graphqlType.Name) {
+				continue
+			}
+
 			types = append(types, TypeInfo{
 				Name:        graphqlType.Name,
 				Kind:        string(graphqlType.Kind),
 				Description: graphqlType.Description,
 			})
+		}
+
+		if len(types) == 0 {
+			fmt.Fprintln(cmd.ErrOrStderr(), "No types found that match the filters.")
 		}
 
 		renderer := render.Renderer[TypeInfo]{
@@ -357,4 +440,13 @@ func init() {
 	typesCmd.Flags().StringArrayVar(&usedByAnyFilter, "used-by-any", nil, "Filter to types used by any of the given types (OR logic)")
 	typesCmd.Flags().StringArrayVar(&notUsedByFilter, "not-used-by", nil, "Exclude types used by any of the given types")
 	typesCmd.Flags().StringArrayVar(&notUsedByAllFilter, "not-used-by-all", nil, "Exclude types only if used by all of the given types")
+	typesCmd.Flags().StringVar(&typesNameFilter, "name", "", "Filter types by name using a glob pattern (e.g., *Connection, User*)")
+	typesCmd.Flags().StringVar(&typesNameRegexFilter, "name-regex", "", "Filter types by name using a regex pattern")
+	typesCmd.Flags().BoolVar(&typesHasDescriptionFilter, "has-description", false, "Filter to only show types that have a description")
+	typesCmd.Flags().BoolVar(&scalarFilter, "scalar", false, "Filter to scalar types")
+	typesCmd.Flags().BoolVar(&typeFilter, "type", false, "Filter to object types")
+	typesCmd.Flags().BoolVar(&interfaceFilter, "interface", false, "Filter to interface types")
+	typesCmd.Flags().BoolVar(&unionFilter, "union", false, "Filter to union types")
+	typesCmd.Flags().BoolVar(&enumFilter, "enum", false, "Filter to enum types")
+	typesCmd.Flags().BoolVar(&inputFilter, "input", false, "Filter to input types")
 }

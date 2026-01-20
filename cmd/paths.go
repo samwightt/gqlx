@@ -251,6 +251,10 @@ Query.viewer -> Viewer.friends, both paths will be shown.`,
 			paths = shortestPaths
 		}
 
+		if len(paths) == 0 {
+			fmt.Fprintln(cmd.ErrOrStderr(), "No paths found that match the filters.")
+		}
+
 		renderer := render.Renderer[PathInfo]{
 			Data:         paths,
 			TextFormat:   formatPathText,

@@ -1002,3 +1002,430 @@ func TestTypes_NotUsedByAllFilter(t *testing.T) {
 	// ID is used by both, so it should be excluded
 	assert.NotContains(t, stdout, "scalar ID")
 }
+
+func TestTypes_NameFilter_Glob(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+		}
+
+		type UserConnection {
+			edges: [User!]!
+		}
+
+		type PostConnection {
+			edges: [User!]!
+		}
+
+		type Query {
+			users: UserConnection
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--name", "*Connection"})
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout, "type UserConnection")
+	assert.Contains(t, stdout, "type PostConnection")
+	assert.NotContains(t, stdout, "type User\n")
+	assert.NotContains(t, stdout, "type Query")
+}
+
+func TestTypes_NameFilter_Regex(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+		}
+
+		type UserConnection {
+			edges: [User!]!
+		}
+
+		type PostConnection {
+			edges: [User!]!
+		}
+
+		type Query {
+			users: UserConnection
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--name-regex", "Connection$"})
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout, "type UserConnection")
+	assert.Contains(t, stdout, "type PostConnection")
+	assert.NotContains(t, stdout, "type User\n")
+	assert.NotContains(t, stdout, "type Query")
+}
+
+func TestTypes_HasDescriptionFilter(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		"A user in the system"
+		type User {
+			id: ID!
+		}
+
+		type Post {
+			id: ID!
+		}
+
+		"User status"
+		enum Status {
+			ACTIVE
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--has-description"})
+	require.NoError(t, err)
+
+	// Should include types with descriptions
+	assert.Contains(t, stdout, "type User")
+	assert.Contains(t, stdout, "enum Status")
+
+	// Should NOT include types without descriptions
+	assert.NotContains(t, stdout, "type Post")
+	assert.NotContains(t, stdout, "type Query")
+}
+
+func TestTypes_HasDescriptionFilter_JSON(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		"A user in the system"
+		type User {
+			id: ID!
+		}
+
+		type Post {
+			id: ID!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "json", "--has-description", "--kind", "type"})
+	require.NoError(t, err)
+
+	var types []struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	err = json.Unmarshal([]byte(stdout), &types)
+	require.NoError(t, err)
+
+	// Find our User type in the results (filtering out built-in introspection types)
+	var foundUser bool
+	for _, typ := range types {
+		if typ.Name == "User" {
+			assert.Equal(t, "A user in the system", typ.Description)
+			foundUser = true
+		}
+		// All results should have descriptions
+		assert.NotEmpty(t, typ.Description, "type %s should have a description", typ.Name)
+	}
+	assert.True(t, foundUser, "Expected to find User type")
+}
+
+func TestTypes_ScalarFlag(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+		}
+
+		enum Status {
+			ACTIVE
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--scalar"})
+	require.NoError(t, err)
+
+	// Should include scalar types
+	assert.Contains(t, stdout, "scalar String")
+	assert.Contains(t, stdout, "scalar Int")
+	assert.Contains(t, stdout, "scalar ID")
+	assert.Contains(t, stdout, "scalar Boolean")
+
+	// Should NOT include non-scalar types
+	assert.NotContains(t, stdout, "type User")
+	assert.NotContains(t, stdout, "enum Status")
+}
+
+func TestTypes_TypeFlag(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+		}
+
+		type Post {
+			id: ID!
+		}
+
+		enum Status {
+			ACTIVE
+		}
+
+		input CreateUserInput {
+			name: String!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--type"})
+	require.NoError(t, err)
+
+	// Should include object types
+	assert.Contains(t, stdout, "type User")
+	assert.Contains(t, stdout, "type Post")
+	assert.Contains(t, stdout, "type Query")
+
+	// Should NOT include non-object types
+	assert.NotContains(t, stdout, "enum Status")
+	assert.NotContains(t, stdout, "input CreateUserInput")
+	assert.NotContains(t, stdout, "scalar")
+}
+
+func TestTypes_InterfaceFlag(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		interface Node {
+			id: ID!
+		}
+
+		interface Timestamped {
+			createdAt: String!
+		}
+
+		type User implements Node {
+			id: ID!
+		}
+
+		type Query {
+			node: Node
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--interface"})
+	require.NoError(t, err)
+
+	// Should include interface types
+	assert.Contains(t, stdout, "interface Node")
+	assert.Contains(t, stdout, "interface Timestamped")
+
+	// Should NOT include non-interface types
+	assert.NotContains(t, stdout, "type User")
+	assert.NotContains(t, stdout, "type Query")
+}
+
+func TestTypes_UnionFlag(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+		}
+
+		type Post {
+			id: ID!
+		}
+
+		union SearchResult = User | Post
+
+		union FeedItem = Post
+
+		type Query {
+			search: SearchResult
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--union"})
+	require.NoError(t, err)
+
+	// Should include union types
+	assert.Contains(t, stdout, "union SearchResult")
+	assert.Contains(t, stdout, "union FeedItem")
+
+	// Should NOT include non-union types
+	assert.NotContains(t, stdout, "type User")
+	assert.NotContains(t, stdout, "type Post")
+}
+
+func TestTypes_EnumFlag(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		enum Status {
+			ACTIVE
+			INACTIVE
+		}
+
+		enum Role {
+			ADMIN
+			USER
+		}
+
+		type User {
+			id: ID!
+			status: Status
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--enum"})
+	require.NoError(t, err)
+
+	// Should include enum types
+	assert.Contains(t, stdout, "enum Status")
+	assert.Contains(t, stdout, "enum Role")
+
+	// Should NOT include non-enum types
+	assert.NotContains(t, stdout, "type User")
+	assert.NotContains(t, stdout, "type Query")
+}
+
+func TestTypes_InputFlag(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		input CreateUserInput {
+			name: String!
+		}
+
+		input UpdateUserInput {
+			name: String
+		}
+
+		type User {
+			id: ID!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--input"})
+	require.NoError(t, err)
+
+	// Should include input types
+	assert.Contains(t, stdout, "input CreateUserInput")
+	assert.Contains(t, stdout, "input UpdateUserInput")
+
+	// Should NOT include non-input types
+	assert.NotContains(t, stdout, "type User")
+	assert.NotContains(t, stdout, "type Query")
+}
+
+func TestTypes_MultipleKindFlags_OR(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+		}
+
+		enum Status {
+			ACTIVE
+		}
+
+		interface Node {
+			id: ID!
+		}
+
+		input CreateUserInput {
+			name: String!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	// --enum and --interface should use OR logic
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--enum", "--interface"})
+	require.NoError(t, err)
+
+	// Should include enums and interfaces
+	assert.Contains(t, stdout, "enum Status")
+	assert.Contains(t, stdout, "interface Node")
+
+	// Should NOT include types or inputs
+	assert.NotContains(t, stdout, "type User")
+	assert.NotContains(t, stdout, "input CreateUserInput")
+}
+
+func TestTypes_KindFlagsWithKindFlag(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+		}
+
+		enum Status {
+			ACTIVE
+		}
+
+		interface Node {
+			id: ID!
+		}
+
+		union SearchResult = User
+
+		type Query {
+			user: User
+		}
+	`)
+
+	// --type, --enum, and --kind union should all use OR logic
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--type", "--enum", "--kind", "union"})
+	require.NoError(t, err)
+
+	// Should include types, enums, and unions
+	assert.Contains(t, stdout, "type User")
+	assert.Contains(t, stdout, "type Query")
+	assert.Contains(t, stdout, "enum Status")
+	assert.Contains(t, stdout, "union SearchResult")
+
+	// Should NOT include interfaces
+	assert.NotContains(t, stdout, "interface Node")
+}
+
+func TestTypes_KindFlagsWithOtherFilters(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		"A user in the system"
+		type User {
+			id: ID!
+		}
+
+		type Post {
+			id: ID!
+		}
+
+		"User status"
+		enum Status {
+			ACTIVE
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	// --type with --has-description should show only types with descriptions
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--type", "--has-description"})
+	require.NoError(t, err)
+
+	// Should include types with descriptions
+	assert.Contains(t, stdout, "type User")
+
+	// Should NOT include types without descriptions or non-types
+	assert.NotContains(t, stdout, "type Post")
+	assert.NotContains(t, stdout, "type Query")
+	assert.NotContains(t, stdout, "enum Status")
+}
