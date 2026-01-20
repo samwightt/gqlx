@@ -15,16 +15,35 @@ import (
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "gqlx",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
+	Short: "Search and explore GraphQL schema files by structure, not just text",
+	Long: `gqlx is a tool for searching GraphQL schema files by their structure.
+It understands the syntax in .graphql files and lets you explore using GraphQL concepts:
+what interfaces a type implements, what a field returns, whether arguments are required, etc.
+It's grep for GraphQL schema files.
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+Commands usually output lists that are filtered by various flags. Check the help of each
+command to see what it supports. By default, gqlx tries to read ./schema.graphql in the
+working directory. A different schema file can be specified using -s.
+
+Output can be formatted as pretty tables (default in terminals), plain text
+(default when piping), or JSON for integration with other tools.`,
+	Example: `  # List all types in the schema
+  gqlx types
+
+  # Find all types used in Query fields that implement Node interface
+  gqlx types --used-by Query --implements Node
+
+  # Find deprecated pagination fields that need cleanup
+  gqlx fields --deprecated --has-arg first --has-arg after
+
+  # See the required ID arguments for a resolver.
+  gqlx args Query.users --required --type ID
+
+  # Find shortest way to query comments that go through Post
+  gqlx paths Comment --through Post --shortest
+
+  # Pipe JSON output to other tools
+  gqlx types -f json | jq '.[].name'`,
 }
 
 var (
