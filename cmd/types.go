@@ -56,7 +56,10 @@ func formatTypesPretty(types []TypeInfo) string {
 var implementsFilter string
 var hasFieldFilter []string
 var kindFilter []string
-var usedByFilter string
+var usedByFilter []string
+var usedByAnyFilter []string
+var notUsedByFilter []string
+var notUsedByAllFilter []string
 
 var validKinds = map[string]ast.DefinitionKind{
 	"scalar":    ast.Scalar,
@@ -175,8 +178,17 @@ Multiple filters can be combined and are applied with AND logic.`,
 	Example: `  # Find all types that could be returned by the API
   gqlx types --kind type --kind interface
 
-  # Find input types used directly in the args of 'User'
-  gqlx types --kind input --used-by User
+  # Find input types used by Query
+  gqlx types --kind input --used-by Query
+
+  # Find types used by both Query AND Mutation
+  gqlx types --used-by Query --used-by Mutation
+
+  # Find types used by Query OR Mutation
+  gqlx types --used-by-any Query --used-by-any Mutation
+
+  # Find types not used by Query (potentially orphaned)
+  gqlx types --not-used-by Query
 
   # Find all node types for Relay-style pagination
   gqlx types --implements Node
@@ -193,20 +205,56 @@ Multiple filters can be combined and are applied with AND logic.`,
 			return err
 		}
 
-		// Validate and get types used by the specified type
-		var usedByTypes map[string]bool
-		if usedByFilter != "" {
-			if schema.Types[usedByFilter] == nil {
+		// Helper to validate type exists and get types used by it
+		validateAndGetUsedBy := func(typeName string) (map[string]bool, error) {
+			if schema.Types[typeName] == nil {
 				var typeNames []string
 				for name := range schema.Types {
 					typeNames = append(typeNames, name)
 				}
-				if suggestion := findClosest(usedByFilter, typeNames); suggestion != "" {
-					return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", usedByFilter, suggestion)
+				if suggestion := findClosest(typeName, typeNames); suggestion != "" {
+					return nil, fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", typeName, suggestion)
 				}
-				return fmt.Errorf("type '%s' does not exist in schema", usedByFilter)
+				return nil, fmt.Errorf("type '%s' does not exist in schema", typeName)
 			}
-			usedByTypes = getTypesUsedBy(schema, usedByFilter)
+			return getTypesUsedBy(schema, typeName), nil
+		}
+
+		// Collect type sets for all filters
+		var usedBySets []map[string]bool
+		for _, typeName := range usedByFilter {
+			usedBy, err := validateAndGetUsedBy(typeName)
+			if err != nil {
+				return err
+			}
+			usedBySets = append(usedBySets, usedBy)
+		}
+
+		var usedByAnySets []map[string]bool
+		for _, typeName := range usedByAnyFilter {
+			usedBy, err := validateAndGetUsedBy(typeName)
+			if err != nil {
+				return err
+			}
+			usedByAnySets = append(usedByAnySets, usedBy)
+		}
+
+		var notUsedBySets []map[string]bool
+		for _, typeName := range notUsedByFilter {
+			usedBy, err := validateAndGetUsedBy(typeName)
+			if err != nil {
+				return err
+			}
+			notUsedBySets = append(notUsedBySets, usedBy)
+		}
+
+		var notUsedByAllSets []map[string]bool
+		for _, typeName := range notUsedByAllFilter {
+			usedBy, err := validateAndGetUsedBy(typeName)
+			if err != nil {
+				return err
+			}
+			notUsedByAllSets = append(notUsedByAllSets, usedBy)
 		}
 
 		var types []TypeInfo
@@ -220,8 +268,61 @@ Multiple filters can be combined and are applied with AND logic.`,
 			if !matchesKindFilter(graphqlType) {
 				continue
 			}
-			if usedByFilter != "" && !usedByTypes[graphqlType.Name] {
-				continue
+
+			// --used-by (AND): must be used by ALL specified types
+			if len(usedBySets) > 0 {
+				usedByAll := true
+				for _, usedBySet := range usedBySets {
+					if !usedBySet[graphqlType.Name] {
+						usedByAll = false
+						break
+					}
+				}
+				if !usedByAll {
+					continue
+				}
+			}
+
+			// --used-by-any (OR): must be used by ANY of the specified types
+			if len(usedByAnySets) > 0 {
+				usedByAny := false
+				for _, usedBySet := range usedByAnySets {
+					if usedBySet[graphqlType.Name] {
+						usedByAny = true
+						break
+					}
+				}
+				if !usedByAny {
+					continue
+				}
+			}
+
+			// --not-used-by (AND): must NOT be used by ANY of the specified types
+			if len(notUsedBySets) > 0 {
+				usedByAny := false
+				for _, usedBySet := range notUsedBySets {
+					if usedBySet[graphqlType.Name] {
+						usedByAny = true
+						break
+					}
+				}
+				if usedByAny {
+					continue
+				}
+			}
+
+			// --not-used-by-all (OR): exclude only if used by ALL specified types
+			if len(notUsedByAllSets) > 0 {
+				usedByAll := true
+				for _, usedBySet := range notUsedByAllSets {
+					if !usedBySet[graphqlType.Name] {
+						usedByAll = false
+						break
+					}
+				}
+				if usedByAll {
+					continue
+				}
 			}
 
 			types = append(types, TypeInfo{
@@ -252,5 +353,8 @@ func init() {
 	typesCmd.Flags().StringVar(&implementsFilter, "implements", "", "Filter to types that implement the given interface")
 	typesCmd.Flags().StringArrayVar(&hasFieldFilter, "has-field", nil, "Filter to types that have the given field (can be specified multiple times)")
 	typesCmd.Flags().StringArrayVar(&kindFilter, "kind", nil, "Filter to types of the given kind: scalar, type, interface, union, enum, input (if specified multiple times, applied using OR logic)")
-	typesCmd.Flags().StringVar(&usedByFilter, "used-by", "", "Filter to types that are used by the given type (in fields or arguments)")
+	typesCmd.Flags().StringArrayVar(&usedByFilter, "used-by", nil, "Filter to types used by the given type (AND logic when specified multiple times)")
+	typesCmd.Flags().StringArrayVar(&usedByAnyFilter, "used-by-any", nil, "Filter to types used by any of the given types (OR logic)")
+	typesCmd.Flags().StringArrayVar(&notUsedByFilter, "not-used-by", nil, "Exclude types used by any of the given types")
+	typesCmd.Flags().StringArrayVar(&notUsedByAllFilter, "not-used-by-all", nil, "Exclude types only if used by all of the given types")
 }

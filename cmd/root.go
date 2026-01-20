@@ -74,7 +74,10 @@ func ResetFlags() {
 	implementsFilter = ""
 	hasFieldFilter = nil
 	kindFilter = nil
-	usedByFilter = ""
+	usedByFilter = nil
+	usedByAnyFilter = nil
+	notUsedByFilter = nil
+	notUsedByAllFilter = nil
 	// fields command flags
 	deprecatedFilter = false
 	hasArgFilter = nil

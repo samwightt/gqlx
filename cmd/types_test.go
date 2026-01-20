@@ -878,3 +878,127 @@ func TestTypes_HasFieldFilter_CombinedWithImplements(t *testing.T) {
 	assert.NotContains(t, stdout, "type Post")
 	assert.NotContains(t, stdout, "type Query")
 }
+
+func TestTypes_UsedByFilter_Multiple_AND(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+			name: String!
+		}
+
+		type Post {
+			id: ID!
+			author: User!
+		}
+
+		type Query {
+			user: User
+			post: Post
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--used-by", "User", "--used-by", "Post"})
+	require.NoError(t, err)
+
+	// ID is used by both User AND Post
+	assert.Contains(t, stdout, "scalar ID")
+
+	// String is only used by User, not Post
+	assert.NotContains(t, stdout, "scalar String")
+	// User is only used by Post, not User
+	assert.NotContains(t, stdout, "type User")
+}
+
+func TestTypes_UsedByAnyFilter(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+			name: String!
+		}
+
+		type Post {
+			id: ID!
+			title: String!
+			views: Int!
+		}
+
+		type Comment {
+			text: String!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--used-by-any", "User", "--used-by-any", "Post"})
+	require.NoError(t, err)
+
+	// ID, String used by User OR Post
+	assert.Contains(t, stdout, "scalar ID")
+	assert.Contains(t, stdout, "scalar String")
+	// Int only used by Post
+	assert.Contains(t, stdout, "scalar Int")
+
+	// Comment not used by either
+	assert.NotContains(t, stdout, "type Comment")
+}
+
+func TestTypes_NotUsedByFilter(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+		}
+
+		type Post {
+			id: ID!
+		}
+
+		type Orphan {
+			name: String!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--not-used-by", "User", "--kind", "type"})
+	require.NoError(t, err)
+
+	// Orphan is not used by User
+	assert.Contains(t, stdout, "type Orphan")
+	assert.Contains(t, stdout, "type Post")
+	assert.Contains(t, stdout, "type Query")
+
+	// User uses itself? No, but we filter to --kind type so ID wouldn't show anyway
+}
+
+func TestTypes_NotUsedByAllFilter(t *testing.T) {
+	schemaPath := writeTypesTestSchema(t, `
+		type User {
+			id: ID!
+			name: String!
+		}
+
+		type Post {
+			id: ID!
+			views: Int!
+		}
+
+		type Query {
+			user: User
+		}
+	`)
+
+	// Exclude only if used by ALL of User AND Post (i.e., only ID)
+	stdout, _, err := cmd.ExecuteWithArgs([]string{"types", "-s", schemaPath, "-f", "text", "--not-used-by-all", "User", "--not-used-by-all", "Post", "--kind", "scalar"})
+	require.NoError(t, err)
+
+	// String is only used by User, Int only by Post - both should appear
+	assert.Contains(t, stdout, "scalar String")
+	assert.Contains(t, stdout, "scalar Int")
+
+	// ID is used by both, so it should be excluded
+	assert.NotContains(t, stdout, "scalar ID")
+}
