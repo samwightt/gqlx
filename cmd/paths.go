@@ -192,14 +192,9 @@ Query.viewer -> Viewer.friends, both paths will be shown.`,
 
 		// Filter to paths through specific type if requested
 		if pathsThroughType != "" {
-			var filteredPaths []PathInfo
-			for _, p := range paths {
-				// Check if path goes through the specified type
-				if strings.Contains(p.Path, pathsThroughType+".") {
-					filteredPaths = append(filteredPaths, p)
-				}
-			}
-			paths = filteredPaths
+			paths = filterSlice(paths, func(p PathInfo) bool {
+				return strings.Contains(p.Path, pathsThroughType+".")
+			})
 		}
 
 		// Filter to shortest paths if requested
@@ -211,13 +206,9 @@ Query.viewer -> Viewer.friends, both paths will be shown.`,
 					minDepth = depth
 				}
 			}
-			var shortestPaths []PathInfo
-			for _, p := range paths {
-				if len(strings.Split(p.Path, " -> ")) == minDepth {
-					shortestPaths = append(shortestPaths, p)
-				}
-			}
-			paths = shortestPaths
+			paths = filterSlice(paths, func(p PathInfo) bool {
+				return len(strings.Split(p.Path, " -> ")) == minDepth
+			})
 		}
 
 		if len(paths) == 0 {
