@@ -3,6 +3,7 @@ module github.com/samwightt/gqlx
 go 1.25.5
 
 require (
+	github.com/agnivade/levenshtein v1.2.1
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/charmbracelet/colorprofile v0.4.1 // indirect
 	github.com/charmbracelet/x/ansi v0.11.4 // indirect
