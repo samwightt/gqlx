@@ -63,18 +63,6 @@ func loadCliForSchema() (*ast.Schema, error) {
 	return schema, nil
 }
 
-func typeToString(typeDef *ast.Type) string {
-	requiredStr := ""
-	if typeDef.NonNull {
-		requiredStr = "!"
-	}
-	if typeDef.Elem != nil {
-		return fmt.Sprintf("[%s]%s", typeToString(typeDef.Elem), requiredStr)
-	} else {
-		return typeDef.NamedType + requiredStr
-	}
-}
-
 func fieldToInfo(fieldDef *ast.FieldDefinition) FieldInfo {
 	var args []ArgumentInfo
 	for _, arg := range fieldDef.Arguments {
@@ -162,13 +150,6 @@ var hasDescriptionFilter bool
 
 func isFieldDeprecated(field *ast.FieldDefinition) bool {
 	return field.Directives.ForName("deprecated") != nil
-}
-
-func getBaseTypeName(t *ast.Type) string {
-	if t.Elem != nil {
-		return getBaseTypeName(t.Elem)
-	}
-	return t.NamedType
 }
 
 func matchesHasArgFilter(field *ast.FieldDefinition) bool {

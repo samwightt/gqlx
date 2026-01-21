@@ -54,3 +54,24 @@ func validateTypeExists(schema *ast.Schema, typeName, context string) error {
 	}
 	return nil
 }
+
+// typeToString converts an ast.Type to a human-readable string (e.g., "String!", "[User!]!").
+func typeToString(typeDef *ast.Type) string {
+	requiredStr := ""
+	if typeDef.NonNull {
+		requiredStr = "!"
+	}
+	if typeDef.Elem != nil {
+		return fmt.Sprintf("[%s]%s", typeToString(typeDef.Elem), requiredStr)
+	}
+	return typeDef.NamedType + requiredStr
+}
+
+// getBaseTypeName returns the underlying named type from a (potentially wrapped) type.
+// For example, [User!]! returns "User".
+func getBaseTypeName(t *ast.Type) string {
+	if t.Elem != nil {
+		return getBaseTypeName(t.Elem)
+	}
+	return t.NamedType
+}
