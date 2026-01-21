@@ -44,6 +44,7 @@ type Location struct {
 type ValidationError struct {
 	Message   string     `json:"message"`
 	Locations []Location `json:"locations,omitempty"`
+	Rule      string     `json:"rule,omitempty"` // e.g., "FieldsOnCorrectType"
 }
 
 type ValidationResult struct {

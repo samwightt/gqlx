@@ -9,7 +9,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"strings"
 
+	"github.com/samwightt/gqlx/pkg/diagnostic"
 	"github.com/spf13/cobra"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -27,6 +30,7 @@ func convertGQLErrors(errs gqlerror.List) []ValidationError {
 	for _, err := range errs {
 		valErr := ValidationError{
 			Message: err.Message,
+			Rule:    err.Rule,
 		}
 		for _, loc := range err.Locations {
 			valErr.Locations = append(valErr.Locations, Location{
@@ -57,10 +61,83 @@ func runValidate(querySource string, queryContent string, schema *ast.Schema) *V
 	return &ValidationResult{Valid: true}
 }
 
-func formatValidationResultText(result *ValidationResult, sourceName string) string {
+// Validation Error Display
+//
+// gqlparser returns errors with a Rule name (e.g., "FieldsOnCorrectType") and
+// Location (line, column). However, the Location only has start position - no
+// end position or span length.
+//
+// To show nice underlines like Rust/Elm, we handle specific rules specially:
+// - For known rules, we parse the error message to extract relevant info
+//   (field name, type name) and use that to calculate span length and suggestions.
+// - For unknown rules, we fall back to a single caret (^).
+//
+// This approach lets us progressively add nicer error display for specific
+// validation rules while still handling everything else gracefully.
+
+// Regex to parse FieldsOnCorrectType error messages
+// Example: Cannot query field "badField" on type "Query".
+var fieldsOnCorrectTypeRegex = regexp.MustCompile(`Cannot query field "([^"]+)" on type "([^"]+)"`)
+
+// parseFieldsOnCorrectTypeError extracts field name and type name from the error message.
+// Returns empty strings if the message doesn't match.
+func parseFieldsOnCorrectTypeError(message string) (fieldName, typeName string) {
+	matches := fieldsOnCorrectTypeRegex.FindStringSubmatch(message)
+	if len(matches) == 3 {
+		return matches[1], matches[2]
+	}
+	return "", ""
+}
+
+// errorSpanLength returns the length to underline for a given error.
+// For known rules, it calculates the actual span. Otherwise returns 1.
+func errorSpanLength(err ValidationError) int {
+	switch err.Rule {
+	case "FieldsOnCorrectType":
+		fieldName, _ := parseFieldsOnCorrectTypeError(err.Message)
+		if fieldName != "" {
+			return len(fieldName)
+		}
+	}
+	return 1
+}
+
+// errorSuggestion returns a "did you mean" suggestion for the error, if applicable.
+func errorSuggestion(err ValidationError, schema *ast.Schema) string {
+	switch err.Rule {
+	case "FieldsOnCorrectType":
+		fieldName, typeName := parseFieldsOnCorrectTypeError(err.Message)
+		if fieldName == "" || typeName == "" {
+			return ""
+		}
+
+		// Look up the type in the schema
+		typeDef := schema.Types[typeName]
+		if typeDef == nil {
+			return ""
+		}
+
+		// Get available field names
+		var fieldNames []string
+		for _, f := range typeDef.Fields {
+			fieldNames = append(fieldNames, f.Name)
+		}
+
+		// Find closest match
+		closest := findClosest(fieldName, fieldNames)
+		if closest != "" {
+			return fmt.Sprintf("did you mean `%s`?", closest)
+		}
+	}
+	return ""
+}
+
+func formatValidationResultText(result *ValidationResult, sourceName string, sourceContent string, schema *ast.Schema) string {
 	if result.Valid {
 		return "✓ Query is valid"
 	}
+
+	lines := strings.Split(sourceContent, "\n")
 
 	var output string
 	if len(result.Errors) == 1 {
@@ -72,7 +149,19 @@ func formatValidationResultText(result *ValidationResult, sourceName string) str
 	for _, err := range result.Errors {
 		if len(err.Locations) > 0 {
 			loc := err.Locations[0]
-			output += fmt.Sprintf("  %s:%d:%d - %s\n", sourceName, loc.Line, loc.Column, err.Message)
+			output += diagnostic.RenderLocation(sourceName, loc.Line, loc.Column) + "\n"
+
+			// Get the source line if available
+			if loc.Line > 0 && loc.Line <= len(lines) {
+				sourceLine := lines[loc.Line-1]
+				length := errorSpanLength(err)
+				output += diagnostic.RenderSnippet(sourceLine, loc.Line, loc.Column, length, err.Message) + "\n"
+			}
+
+			// Add suggestion if available
+			if suggestion := errorSuggestion(err, schema); suggestion != "" {
+				output += "  = help: " + suggestion + "\n"
+			}
 		} else {
 			output += fmt.Sprintf("  %s\n", err.Message)
 		}
@@ -153,7 +242,7 @@ Output formats:
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), output)
 		default:
-			fmt.Fprint(cmd.OutOrStdout(), formatValidationResultText(result, querySource))
+			fmt.Fprint(cmd.OutOrStdout(), formatValidationResultText(result, querySource, queryContent, schema))
 		}
 
 		// Return error if validation failed (causes exit code 1)
