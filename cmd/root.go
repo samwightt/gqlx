@@ -122,6 +122,12 @@ func ResetFlags() {
 // ExecuteWithArgs runs the CLI with the given arguments and returns stdout, stderr, and any error.
 // This is useful for testing.
 func ExecuteWithArgs(args []string) (stdout string, stderr string, err error) {
+	return ExecuteWithArgsAndStdin(args, nil)
+}
+
+// ExecuteWithArgsAndStdin runs the CLI with the given arguments and stdin, returns stdout, stderr, and any error.
+// This is useful for testing commands that read from stdin.
+func ExecuteWithArgsAndStdin(args []string, stdin *bytes.Buffer) (stdout string, stderr string, err error) {
 	// Reset command-specific flags to avoid state leaking between tests
 	ResetFlags()
 
@@ -131,6 +137,9 @@ func ExecuteWithArgs(args []string) (stdout string, stderr string, err error) {
 	rootCmd.SetOut(stdoutBuf)
 	rootCmd.SetErr(stderrBuf)
 	rootCmd.SetArgs(args)
+	if stdin != nil {
+		rootCmd.SetIn(stdin)
+	}
 
 	err = rootCmd.Execute()
 

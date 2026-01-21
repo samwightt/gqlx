@@ -35,3 +35,18 @@ type ReferenceInfo struct {
 	Type        string `json:"type"`                  // The full type string e.g., "User!" or "[User!]!"
 	Description string `json:"description,omitempty"` // Description of the field or argument
 }
+
+type Location struct {
+	Line   int `json:"line"`
+	Column int `json:"column"`
+}
+
+type ValidationError struct {
+	Message   string     `json:"message"`
+	Locations []Location `json:"locations,omitempty"`
+}
+
+type ValidationResult struct {
+	Valid  bool              `json:"valid"`
+	Errors []ValidationError `json:"errors,omitempty"`
+}
