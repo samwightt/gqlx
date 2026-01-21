@@ -51,3 +51,19 @@ type ValidationResult struct {
 	Valid  bool              `json:"valid"`
 	Errors []ValidationError `json:"errors,omitempty"`
 }
+
+type PathInfo struct {
+	Path string `json:"path"`
+}
+
+type pathStep struct {
+	typeName  string
+	fieldName string
+	hasArgs   bool
+}
+
+type ValueInfo struct {
+	EnumName    string `json:"enumName,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}

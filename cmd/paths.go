@@ -19,16 +19,6 @@ var pathsFromType string
 var pathsShortestOnly bool
 var pathsThroughType string
 
-type PathInfo struct {
-	Path string `json:"path"`
-}
-
-type pathStep struct {
-	typeName  string
-	fieldName string
-	hasArgs   bool
-}
-
 func formatPathStep(step pathStep) string {
 	if step.hasArgs {
 		return fmt.Sprintf("%s.%s(...)", step.typeName, step.fieldName)

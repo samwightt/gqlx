@@ -16,12 +16,6 @@ import (
 var valuesDeprecatedFilter bool
 var valuesHasDescriptionFilter bool
 
-type ValueInfo struct {
-	EnumName    string `json:"enumName,omitempty"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}
-
 func isValueDeprecated(value *ast.EnumValueDefinition) bool {
 	return value.Directives.ForName("deprecated") != nil
 }
