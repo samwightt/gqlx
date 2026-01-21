@@ -168,13 +168,9 @@ func validateImplementsFilter(schema *ast.Schema, implementsFilter string) error
 
 	iface := schema.Types[implementsFilter]
 	if iface == nil {
-		var interfaces []string
-		for name, def := range schema.Types {
-			if def.Kind == ast.Interface {
-				interfaces = append(interfaces, name)
-			}
-		}
-		if suggestion := findClosest(implementsFilter, interfaces); suggestion != "" {
+		if suggestion := findClosest(implementsFilter, filterKeys(schema.Types, func(_ string, def *ast.Definition) bool {
+			return def.Kind == ast.Interface
+		})); suggestion != "" {
 			return fmt.Errorf("interface '%s' does not exist in schema, did you mean '%s'?", implementsFilter, suggestion)
 		}
 		return fmt.Errorf("interface '%s' does not exist in schema", implementsFilter)

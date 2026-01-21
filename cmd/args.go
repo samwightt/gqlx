@@ -217,11 +217,7 @@ func runArgs(cmd *cobra.Command, args []string, opts *argsOptions) error {
 		}
 
 		if field == nil {
-			var fieldNames []string
-			for _, f := range graphqlType.Fields {
-				fieldNames = append(fieldNames, f.Name)
-			}
-			if suggestion := findClosest(fieldName, fieldNames); suggestion != "" {
+			if suggestion := findClosest(fieldName, pluck(graphqlType.Fields, func(f *ast.FieldDefinition) string { return f.Name })); suggestion != "" {
 				return fmt.Errorf("field '%s' does not exist on type '%s', did you mean '%s'?", fieldName, typeName, suggestion)
 			}
 			return fmt.Errorf("field '%s' does not exist on type '%s'", fieldName, typeName)

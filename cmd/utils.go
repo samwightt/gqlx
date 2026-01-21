@@ -3,6 +3,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"iter"
+	"maps"
 	"os"
 	"path/filepath"
 
@@ -27,10 +29,12 @@ func makeTable() *table.Table {
 
 const maxSuggestionDistance = 5
 
-func findClosest(input string, candidates []string) string {
+// findClosest finds the closest string to input from the candidates using Levenshtein distance.
+// Returns empty string if no candidate is within maxSuggestionDistance.
+func findClosest(input string, candidates iter.Seq[string]) string {
 	minDist := -1
 	closest := ""
-	for _, c := range candidates {
+	for c := range candidates {
 		dist := levenshtein.ComputeDistance(input, c)
 		if minDist == -1 || dist < minDist {
 			minDist = dist
@@ -43,16 +47,36 @@ func findClosest(input string, candidates []string) string {
 	return closest
 }
 
+// pluck returns an iterator that extracts a string from each item using the given function.
+func pluck[T any](items []T, getName func(T) string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for _, item := range items {
+			if !yield(getName(item)) {
+				return
+			}
+		}
+	}
+}
+
+// filterKeys returns an iterator over map keys that satisfy the predicate.
+func filterKeys[K comparable, V any](m map[K]V, predicate func(K, V) bool) iter.Seq[K] {
+	return func(yield func(K) bool) {
+		for k, v := range m {
+			if predicate(k, v) {
+				if !yield(k) {
+					return
+				}
+			}
+		}
+	}
+}
+
 // validateTypeExists checks if a type exists in the schema and returns a helpful
 // error with a "did you mean" suggestion if it doesn't.
 // The context parameter is used to customize the error message (e.g., "type", "interface").
 func validateTypeExists(schema *ast.Schema, typeName, context string) error {
 	if schema.Types[typeName] == nil {
-		var typeNames []string
-		for name := range schema.Types {
-			typeNames = append(typeNames, name)
-		}
-		if suggestion := findClosest(typeName, typeNames); suggestion != "" {
+		if suggestion := findClosest(typeName, maps.Keys(schema.Types)); suggestion != "" {
 			return fmt.Errorf("%s '%s' does not exist in schema, did you mean '%s'?", context, typeName, suggestion)
 		}
 		return fmt.Errorf("%s '%s' does not exist in schema", context, typeName)

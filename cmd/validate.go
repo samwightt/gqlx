@@ -148,14 +148,8 @@ func errorSuggestion(err ValidationError, schema *ast.Schema) string {
 			return ""
 		}
 
-		// Get available field names
-		var fieldNames []string
-		for _, f := range typeDef.Fields {
-			fieldNames = append(fieldNames, f.Name)
-		}
-
 		// Find closest match
-		closest := findClosest(fieldName, fieldNames)
+		closest := findClosest(fieldName, pluck(typeDef.Fields, func(f *ast.FieldDefinition) string { return f.Name }))
 		if closest != "" {
 			return fmt.Sprintf("did you mean `%s`?", closest)
 		}

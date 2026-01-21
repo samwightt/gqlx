@@ -125,13 +125,9 @@ func runValues(cmd *cobra.Command, args []string, opts *valuesOptions) error {
 		enumName := args[0]
 		graphqlType := schema.Types[enumName]
 		if graphqlType == nil {
-			var enumNames []string
-			for name, def := range schema.Types {
-				if def.Kind == ast.Enum {
-					enumNames = append(enumNames, name)
-				}
-			}
-			if suggestion := findClosest(enumName, enumNames); suggestion != "" {
+			if suggestion := findClosest(enumName, filterKeys(schema.Types, func(_ string, def *ast.Definition) bool {
+				return def.Kind == ast.Enum
+			})); suggestion != "" {
 				return fmt.Errorf("enum '%s' does not exist in schema, did you mean '%s'?", enumName, suggestion)
 			}
 			return fmt.Errorf("enum '%s' does not exist in schema", enumName)
