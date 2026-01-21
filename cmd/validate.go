@@ -102,6 +102,37 @@ func errorSpanLength(err ValidationError) int {
 	return 1
 }
 
+// detectZshEscapeIssue checks if a parse error might be caused by zsh's history
+// expansion escaping `!` as `\!`. Returns a help message if detected.
+func detectZshEscapeIssue(err ValidationError, sourceContent string, sourceName string) string {
+	if sourceName != "stdin" {
+		return ""
+	}
+	// Check if content contains \! which is likely zsh escape
+	if !strings.Contains(sourceContent, `\!`) {
+		return ""
+	}
+	// Check if error is near a \! sequence
+	if len(err.Locations) == 0 {
+		return ""
+	}
+	loc := err.Locations[0]
+	lines := strings.Split(sourceContent, "\n")
+	if loc.Line < 1 || loc.Line > len(lines) {
+		return ""
+	}
+	line := lines[loc.Line-1]
+	// Check if there's a \! at or near the error column
+	col := loc.Column - 1
+	if col >= 0 && col < len(line)-1 && line[col] == '\\' && line[col+1] == '!' {
+		return "it looks like zsh escaped `!` as `\\!`. Try using a heredoc instead:\n" +
+			"       cat <<'EOF' | gqlx validate\n" +
+			"       query { ... }\n" +
+			"       EOF"
+	}
+	return ""
+}
+
 // errorSuggestion returns a "did you mean" suggestion for the error, if applicable.
 func errorSuggestion(err ValidationError, schema *ast.Schema) string {
 	switch err.Rule {
@@ -158,8 +189,11 @@ func formatValidationResultText(result *ValidationResult, sourceName string, sou
 				output += diagnostic.RenderSnippet(sourceLine, loc.Line, loc.Column, length, err.Message) + "\n"
 			}
 
-			// Add suggestion if available
-			if suggestion := errorSuggestion(err, schema); suggestion != "" {
+			// Check for zsh escape issue first
+			if zshHelp := detectZshEscapeIssue(err, sourceContent, sourceName); zshHelp != "" {
+				output += "  = help: " + zshHelp + "\n"
+			} else if suggestion := errorSuggestion(err, schema); suggestion != "" {
+				// Add suggestion if available
 				output += "  = help: " + suggestion + "\n"
 			}
 		} else {
