@@ -15,6 +15,25 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
+type typesOptions struct {
+	implements     string
+	hasField       []string
+	kind           []string
+	usedBy         []string
+	usedByAny      []string
+	notUsedBy      []string
+	notUsedByAll   []string
+	name           string
+	nameRegex      string
+	hasDescription bool
+	scalar         bool
+	typeFilter     bool
+	interfaceFlag  bool
+	union          bool
+	enum           bool
+	input          bool
+}
+
 func kindToString(kind string) string {
 	switch kind {
 	case "SCALAR":
@@ -55,23 +74,6 @@ func formatTypesPretty(types []TypeInfo) string {
 	return tbl.String()
 }
 
-var implementsFilter string
-var hasFieldFilter []string
-var kindFilter []string
-var usedByFilter []string
-var usedByAnyFilter []string
-var notUsedByFilter []string
-var notUsedByAllFilter []string
-var typesNameFilter string
-var typesNameRegexFilter string
-var typesHasDescriptionFilter bool
-var scalarFilter bool
-var typeFilter bool
-var interfaceFilter bool
-var unionFilter bool
-var enumFilter bool
-var inputFilter bool
-
 var validKinds = map[string]ast.DefinitionKind{
 	"scalar":    ast.Scalar,
 	"type":      ast.Object,
@@ -82,41 +84,41 @@ var validKinds = map[string]ast.DefinitionKind{
 	"input":     ast.InputObject,
 }
 
-func matchesKindFilter(t *ast.Definition) bool {
+func matchesKindFilter(t *ast.Definition, opts *typesOptions) bool {
 	// Check individual kind flags first (OR logic between them)
-	hasIndividualFilter := scalarFilter || typeFilter || interfaceFilter || unionFilter || enumFilter || inputFilter
+	hasIndividualFilter := opts.scalar || opts.typeFilter || opts.interfaceFlag || opts.union || opts.enum || opts.input
 	if hasIndividualFilter {
 		switch t.Kind {
 		case ast.Scalar:
-			if scalarFilter {
+			if opts.scalar {
 				return true
 			}
 		case ast.Object:
-			if typeFilter {
+			if opts.typeFilter {
 				return true
 			}
 		case ast.Interface:
-			if interfaceFilter {
+			if opts.interfaceFlag {
 				return true
 			}
 		case ast.Union:
-			if unionFilter {
+			if opts.union {
 				return true
 			}
 		case ast.Enum:
-			if enumFilter {
+			if opts.enum {
 				return true
 			}
 		case ast.InputObject:
-			if inputFilter {
+			if opts.input {
 				return true
 			}
 		}
 	}
 
 	// Then check --kind flag
-	if len(kindFilter) > 0 {
-		for _, k := range kindFilter {
+	if len(opts.kind) > 0 {
+		for _, k := range opts.kind {
 			if expectedKind, ok := validKinds[strings.ToLower(k)]; ok {
 				if t.Kind == expectedKind {
 					return true
@@ -126,7 +128,7 @@ func matchesKindFilter(t *ast.Definition) bool {
 	}
 
 	// If no filters specified, match everything
-	if !hasIndividualFilter && len(kindFilter) == 0 {
+	if !hasIndividualFilter && len(opts.kind) == 0 {
 		return true
 	}
 
@@ -159,7 +161,7 @@ func getTypesUsedBy(schema *ast.Schema, typeName string) map[string]bool {
 	return usedTypes
 }
 
-func validateImplementsFilter(schema *ast.Schema) error {
+func validateImplementsFilter(schema *ast.Schema, implementsFilter string) error {
 	if implementsFilter == "" {
 		return nil
 	}
@@ -183,14 +185,14 @@ func validateImplementsFilter(schema *ast.Schema) error {
 	return nil
 }
 
-func matchesImplementsFilter(t *ast.Definition) bool {
+func matchesImplementsFilter(t *ast.Definition, implementsFilter string) bool {
 	if implementsFilter == "" {
 		return true
 	}
 	return slices.Contains(t.Interfaces, implementsFilter)
 }
 
-func matchesHasFieldFilter(t *ast.Definition) bool {
+func matchesHasFieldFilter(t *ast.Definition, hasFieldFilter []string) bool {
 	if len(hasFieldFilter) == 0 {
 		return true
 	}
@@ -244,11 +246,13 @@ func isInAnySets(name string, sets []map[string]bool) bool {
 	return false
 }
 
-// typesCmd represents the types command
-var typesCmd = &cobra.Command{
-	Use:   "types",
-	Short: "Lists all types in the schema",
-	Long: `Lists all types in the schema with optional filtering.
+func NewTypesCmd() *cobra.Command {
+	opts := &typesOptions{}
+
+	cmd := &cobra.Command{
+		Use:   "types",
+		Short: "Lists all types in the schema",
+		Long: `Lists all types in the schema with optional filtering.
 
 Shows the type's kind (enum, type, input, etc.) and the type name.
 
@@ -258,7 +262,7 @@ Output formats:
   pretty  Formatted table with columns (default in terminal)
 
 Multiple filters can be combined and are applied with AND logic.`,
-	Example: `  # Find all types that could be returned by the API
+		Example: `  # Find all types that could be returned by the API
   gqlx types --type --interface
 
   # Find input types used by Query
@@ -287,131 +291,134 @@ Multiple filters can be combined and are applied with AND logic.`,
 
   # Pipe to other tools
   gqlx types --kind type -f json | jq '.[].name'`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var typesNameRegex *regexp.Regexp
-		if typesNameRegexFilter != "" {
-			var err error
-			typesNameRegex, err = regexp.Compile(typesNameRegexFilter)
-			if err != nil {
-				return fmt.Errorf("invalid regex pattern for --name-regex: %w", err)
-			}
-		}
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTypes(cmd, args, opts)
+		},
+	}
 
-		schema, err := loadCliForSchema()
-		if err != nil {
-			return err
-		}
+	cmd.Flags().StringVar(&opts.implements, "implements", "", "Filter to types that implement the given interface")
+	cmd.Flags().StringArrayVar(&opts.hasField, "has-field", nil, "Filter to types that have the given field (can be specified multiple times)")
+	cmd.Flags().StringArrayVar(&opts.kind, "kind", nil, "Filter to types of the given kind: scalar, type, interface, union, enum, input (if specified multiple times, applied using OR logic)")
+	cmd.Flags().StringArrayVar(&opts.usedBy, "used-by", nil, "Filter to types used by the given type (AND logic when specified multiple times)")
+	cmd.Flags().StringArrayVar(&opts.usedByAny, "used-by-any", nil, "Filter to types used by any of the given types (OR logic)")
+	cmd.Flags().StringArrayVar(&opts.notUsedBy, "not-used-by", nil, "Exclude types used by any of the given types")
+	cmd.Flags().StringArrayVar(&opts.notUsedByAll, "not-used-by-all", nil, "Exclude types only if used by all of the given types")
+	cmd.Flags().StringVar(&opts.name, "name", "", "Filter types by name using a glob pattern (e.g., *Connection, User*)")
+	cmd.Flags().StringVar(&opts.nameRegex, "name-regex", "", "Filter types by name using a regex pattern")
+	cmd.Flags().BoolVar(&opts.hasDescription, "has-description", false, "Filter to only show types that have a description")
+	cmd.Flags().BoolVar(&opts.scalar, "scalar", false, "Filter to scalar types")
+	cmd.Flags().BoolVar(&opts.typeFilter, "type", false, "Filter to object types")
+	cmd.Flags().BoolVar(&opts.interfaceFlag, "interface", false, "Filter to interface types")
+	cmd.Flags().BoolVar(&opts.union, "union", false, "Filter to union types")
+	cmd.Flags().BoolVar(&opts.enum, "enum", false, "Filter to enum types")
+	cmd.Flags().BoolVar(&opts.input, "input", false, "Filter to input types")
 
-		if err := validateImplementsFilter(schema); err != nil {
-			return err
-		}
-
-		// Collect type sets for all used-by filters
-		usedBySets, err := collectUsedBySets(schema, usedByFilter)
-		if err != nil {
-			return err
-		}
-		usedByAnySets, err := collectUsedBySets(schema, usedByAnyFilter)
-		if err != nil {
-			return err
-		}
-		notUsedBySets, err := collectUsedBySets(schema, notUsedByFilter)
-		if err != nil {
-			return err
-		}
-		notUsedByAllSets, err := collectUsedBySets(schema, notUsedByAllFilter)
-		if err != nil {
-			return err
-		}
-
-		var types []TypeInfo
-		for _, graphqlType := range schema.Types {
-			if !matchesImplementsFilter(graphqlType) {
-				continue
-			}
-			if !matchesHasFieldFilter(graphqlType) {
-				continue
-			}
-			if !matchesKindFilter(graphqlType) {
-				continue
-			}
-
-			// --used-by (AND): must be used by ALL specified types
-			if len(usedBySets) > 0 && !isInAllSets(graphqlType.Name, usedBySets) {
-				continue
-			}
-
-			// --used-by-any (OR): must be used by ANY of the specified types
-			if len(usedByAnySets) > 0 && !isInAnySets(graphqlType.Name, usedByAnySets) {
-				continue
-			}
-
-			// --not-used-by (AND): must NOT be used by ANY of the specified types
-			if len(notUsedBySets) > 0 && isInAnySets(graphqlType.Name, notUsedBySets) {
-				continue
-			}
-
-			// --not-used-by-all (OR): exclude only if used by ALL specified types
-			if len(notUsedByAllSets) > 0 && isInAllSets(graphqlType.Name, notUsedByAllSets) {
-				continue
-			}
-
-			if typesHasDescriptionFilter && graphqlType.Description == "" {
-				continue
-			}
-			if typesNameFilter != "" {
-				matched, _ := filepath.Match(typesNameFilter, graphqlType.Name)
-				if !matched {
-					continue
-				}
-			}
-			if typesNameRegex != nil && !typesNameRegex.MatchString(graphqlType.Name) {
-				continue
-			}
-
-			types = append(types, TypeInfo{
-				Name:        graphqlType.Name,
-				Kind:        string(graphqlType.Kind),
-				Description: graphqlType.Description,
-			})
-		}
-
-		if len(types) == 0 {
-			fmt.Fprintln(cmd.ErrOrStderr(), "No types found that match the filters.")
-		}
-
-		renderer := render.Renderer[TypeInfo]{
-			Data:         types,
-			TextFormat:   formatTypeText,
-			PrettyFormat: formatTypesPretty,
-		}
-
-		output, err := renderer.Render(outputFormat)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), output)
-		return nil
-	},
+	return cmd
 }
 
-func init() {
-	rootCmd.AddCommand(typesCmd)
+func runTypes(cmd *cobra.Command, args []string, opts *typesOptions) error {
+	var typesNameRegex *regexp.Regexp
+	if opts.nameRegex != "" {
+		var err error
+		typesNameRegex, err = regexp.Compile(opts.nameRegex)
+		if err != nil {
+			return fmt.Errorf("invalid regex pattern for --name-regex: %w", err)
+		}
+	}
 
-	typesCmd.Flags().StringVar(&implementsFilter, "implements", "", "Filter to types that implement the given interface")
-	typesCmd.Flags().StringArrayVar(&hasFieldFilter, "has-field", nil, "Filter to types that have the given field (can be specified multiple times)")
-	typesCmd.Flags().StringArrayVar(&kindFilter, "kind", nil, "Filter to types of the given kind: scalar, type, interface, union, enum, input (if specified multiple times, applied using OR logic)")
-	typesCmd.Flags().StringArrayVar(&usedByFilter, "used-by", nil, "Filter to types used by the given type (AND logic when specified multiple times)")
-	typesCmd.Flags().StringArrayVar(&usedByAnyFilter, "used-by-any", nil, "Filter to types used by any of the given types (OR logic)")
-	typesCmd.Flags().StringArrayVar(&notUsedByFilter, "not-used-by", nil, "Exclude types used by any of the given types")
-	typesCmd.Flags().StringArrayVar(&notUsedByAllFilter, "not-used-by-all", nil, "Exclude types only if used by all of the given types")
-	typesCmd.Flags().StringVar(&typesNameFilter, "name", "", "Filter types by name using a glob pattern (e.g., *Connection, User*)")
-	typesCmd.Flags().StringVar(&typesNameRegexFilter, "name-regex", "", "Filter types by name using a regex pattern")
-	typesCmd.Flags().BoolVar(&typesHasDescriptionFilter, "has-description", false, "Filter to only show types that have a description")
-	typesCmd.Flags().BoolVar(&scalarFilter, "scalar", false, "Filter to scalar types")
-	typesCmd.Flags().BoolVar(&typeFilter, "type", false, "Filter to object types")
-	typesCmd.Flags().BoolVar(&interfaceFilter, "interface", false, "Filter to interface types")
-	typesCmd.Flags().BoolVar(&unionFilter, "union", false, "Filter to union types")
-	typesCmd.Flags().BoolVar(&enumFilter, "enum", false, "Filter to enum types")
-	typesCmd.Flags().BoolVar(&inputFilter, "input", false, "Filter to input types")
+	schema, err := loadCliForSchema()
+	if err != nil {
+		return err
+	}
+
+	if err := validateImplementsFilter(schema, opts.implements); err != nil {
+		return err
+	}
+
+	// Collect type sets for all used-by filters
+	usedBySets, err := collectUsedBySets(schema, opts.usedBy)
+	if err != nil {
+		return err
+	}
+	usedByAnySets, err := collectUsedBySets(schema, opts.usedByAny)
+	if err != nil {
+		return err
+	}
+	notUsedBySets, err := collectUsedBySets(schema, opts.notUsedBy)
+	if err != nil {
+		return err
+	}
+	notUsedByAllSets, err := collectUsedBySets(schema, opts.notUsedByAll)
+	if err != nil {
+		return err
+	}
+
+	var types []TypeInfo
+	for _, graphqlType := range schema.Types {
+		if !matchesImplementsFilter(graphqlType, opts.implements) {
+			continue
+		}
+		if !matchesHasFieldFilter(graphqlType, opts.hasField) {
+			continue
+		}
+		if !matchesKindFilter(graphqlType, opts) {
+			continue
+		}
+
+		// --used-by (AND): must be used by ALL specified types
+		if len(usedBySets) > 0 && !isInAllSets(graphqlType.Name, usedBySets) {
+			continue
+		}
+
+		// --used-by-any (OR): must be used by ANY of the specified types
+		if len(usedByAnySets) > 0 && !isInAnySets(graphqlType.Name, usedByAnySets) {
+			continue
+		}
+
+		// --not-used-by (AND): must NOT be used by ANY of the specified types
+		if len(notUsedBySets) > 0 && isInAnySets(graphqlType.Name, notUsedBySets) {
+			continue
+		}
+
+		// --not-used-by-all (OR): exclude only if used by ALL specified types
+		if len(notUsedByAllSets) > 0 && isInAllSets(graphqlType.Name, notUsedByAllSets) {
+			continue
+		}
+
+		if opts.hasDescription && graphqlType.Description == "" {
+			continue
+		}
+		if opts.name != "" {
+			matched, _ := filepath.Match(opts.name, graphqlType.Name)
+			if !matched {
+				continue
+			}
+		}
+		if typesNameRegex != nil && !typesNameRegex.MatchString(graphqlType.Name) {
+			continue
+		}
+
+		types = append(types, TypeInfo{
+			Name:        graphqlType.Name,
+			Kind:        string(graphqlType.Kind),
+			Description: graphqlType.Description,
+		})
+	}
+
+	if len(types) == 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "No types found that match the filters.")
+	}
+
+	renderer := render.Renderer[TypeInfo]{
+		Data:         types,
+		TextFormat:   formatTypeText,
+		PrettyFormat: formatTypesPretty,
+	}
+
+	output, err := renderer.Render(outputFormat)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), output)
+	return nil
 }

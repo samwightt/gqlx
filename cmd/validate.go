@@ -43,7 +43,7 @@ func convertGQLErrors(errs gqlerror.List) []ValidationError {
 	return result
 }
 
-func runValidate(querySource string, queryContent string, schema *ast.Schema) *ValidationResult {
+func validateQuery(querySource string, queryContent string, schema *ast.Schema) *ValidationResult {
 	// Parse query document
 	source := &ast.Source{Input: queryContent, Name: querySource}
 	doc, parseErr := gqlparser.LoadQuery(schema, source.Input)
@@ -212,11 +212,11 @@ func formatValidationResultJSON(result *ValidationResult) (string, error) {
 	return string(bytes), nil
 }
 
-// validateCmd represents the validate command
-var validateCmd = &cobra.Command{
-	Use:   "validate [file]",
-	Short: "Type-check a GraphQL query against the schema",
-	Long: `Validates a GraphQL query, mutation, or subscription against the schema.
+func NewValidateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "validate [file]",
+		Short: "Type-check a GraphQL query against the schema",
+		Long: `Validates a GraphQL query, mutation, or subscription against the schema.
 
 The query can be provided as a file path argument or piped via stdin.
 
@@ -227,7 +227,7 @@ Exit codes:
 Output formats:
   text    Human-readable error messages with locations
   json    {"valid": bool, "errors": [...]}`,
-	Example: `  # Validate from a file
+		Example: `  # Validate from a file
   gqlx validate query.graphql
 
   # Validate from stdin
@@ -235,59 +235,60 @@ Output formats:
 
   # JSON output for CI integration
   gqlx validate query.graphql -f json`,
-	Args:          cobra.MaximumNArgs(1),
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		schema, err := loadCliForSchema()
+		Args:          cobra.MaximumNArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE:          runValidateCmd,
+	}
+
+	return cmd
+}
+
+func runValidateCmd(cmd *cobra.Command, args []string) error {
+	schema, err := loadCliForSchema()
+	if err != nil {
+		return err
+	}
+
+	var queryContent string
+	var querySource string
+
+	if len(args) == 1 {
+		// Read from file
+		querySource = args[0]
+		bytes, err := os.ReadFile(querySource)
+		if err != nil {
+			return fmt.Errorf("failed to read query file: %w", err)
+		}
+		queryContent = string(bytes)
+	} else {
+		// Read from stdin
+		querySource = "stdin"
+		bytes, err := io.ReadAll(cmd.InOrStdin())
+		if err != nil {
+			return fmt.Errorf("failed to read from stdin: %w", err)
+		}
+		queryContent = string(bytes)
+	}
+
+	result := validateQuery(querySource, queryContent, schema)
+
+	// Output the result
+	switch outputFormat {
+	case "json":
+		output, err := formatValidationResultJSON(result)
 		if err != nil {
 			return err
 		}
+		fmt.Fprintln(cmd.OutOrStdout(), output)
+	default:
+		fmt.Fprint(cmd.OutOrStdout(), formatValidationResultText(result, querySource, queryContent, schema))
+	}
 
-		var queryContent string
-		var querySource string
+	// Return error if validation failed (causes exit code 1)
+	if !result.Valid {
+		return ErrValidationFailed
+	}
 
-		if len(args) == 1 {
-			// Read from file
-			querySource = args[0]
-			bytes, err := os.ReadFile(querySource)
-			if err != nil {
-				return fmt.Errorf("failed to read query file: %w", err)
-			}
-			queryContent = string(bytes)
-		} else {
-			// Read from stdin
-			querySource = "stdin"
-			bytes, err := io.ReadAll(cmd.InOrStdin())
-			if err != nil {
-				return fmt.Errorf("failed to read from stdin: %w", err)
-			}
-			queryContent = string(bytes)
-		}
-
-		result := runValidate(querySource, queryContent, schema)
-
-		// Output the result
-		switch outputFormat {
-		case "json":
-			output, err := formatValidationResultJSON(result)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), output)
-		default:
-			fmt.Fprint(cmd.OutOrStdout(), formatValidationResultText(result, querySource, queryContent, schema))
-		}
-
-		// Return error if validation failed (causes exit code 1)
-		if !result.Valid {
-			return ErrValidationFailed
-		}
-
-		return nil
-	},
-}
-
-func init() {
-	rootCmd.AddCommand(validateCmd)
+	return nil
 }

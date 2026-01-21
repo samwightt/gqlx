@@ -15,29 +15,31 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-var argsDeprecatedFilter bool
-var argsTypeFilter string
-var argsRequiredFilter bool
-var argsNullableFilter bool
-var argsNameFilter string
-var argsNameRegexFilter string
-var argsHasDescriptionFilter bool
+type argsOptions struct {
+	deprecated     bool
+	typeFilter     string
+	required       bool
+	nullable       bool
+	name           string
+	nameRegex      string
+	hasDescription bool
+}
 
 func isArgDeprecated(arg *ast.ArgumentDefinition) bool {
 	return arg.Directives.ForName("deprecated") != nil
 }
 
-func matchesArgFilters(arg *ast.ArgumentDefinition) bool {
-	if argsTypeFilter != "" && getBaseTypeName(arg.Type) != argsTypeFilter {
+func matchesArgFilters(arg *ast.ArgumentDefinition, opts *argsOptions) bool {
+	if opts.typeFilter != "" && getBaseTypeName(arg.Type) != opts.typeFilter {
 		return false
 	}
-	if argsRequiredFilter && !arg.Type.NonNull {
+	if opts.required && !arg.Type.NonNull {
 		return false
 	}
-	if argsNullableFilter && arg.Type.NonNull {
+	if opts.nullable && arg.Type.NonNull {
 		return false
 	}
-	if argsHasDescriptionFilter && arg.Description == "" {
+	if opts.hasDescription && arg.Description == "" {
 		return false
 	}
 	return true
@@ -96,165 +98,169 @@ func argToInfo(arg *ast.ArgumentDefinition) ArgInfo {
 	}
 }
 
-// argsCmd represents the args command
-var argsCmd = &cobra.Command{
-	Use:   "args [field]",
-	Short: "Lists arguments on fields.",
-	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		schema, err := loadSchema()
-		if err != nil {
-			return nil, cobra.ShellCompDirectiveError
-		}
+func NewArgsCmd() *cobra.Command {
+	opts := &argsOptions{}
 
-		outputNames := []string{}
-		for _, typeDef := range schema.Types {
-			for _, field := range typeDef.Fields {
-				if len(field.Arguments) > 0 {
+	cmd := &cobra.Command{
+		Use:   "args [field]",
+		Short: "Lists arguments on fields.",
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			schema, err := loadSchema()
+			if err != nil {
+				return nil, cobra.ShellCompDirectiveError
+			}
+
+			outputNames := []string{}
+			for _, typeDef := range schema.Types {
+				for _, field := range typeDef.Fields {
+					if len(field.Arguments) == 0 { continue }
 					fieldName := fmt.Sprintf("%s.%s", typeDef.Name, field.Name)
 					if strings.Contains(strings.ToLower(fieldName), strings.ToLower(toComplete)) {
 						outputNames = append(outputNames, fieldName)
 					}
 				}
 			}
-		}
 
-		sort.Strings(outputNames)
+			sort.Strings(outputNames)
 
-		return outputNames, cobra.ShellCompDirectiveNoFileComp
-	},
-	Args: cobra.MaximumNArgs(1),
-	Long: `Lists arguments on fields in the schema.
+			return outputNames, cobra.ShellCompDirectiveNoFileComp
+		},
+		Args: cobra.MaximumNArgs(1),
+		Long: `Lists arguments on fields in the schema.
 
 If a field is specified (as Type.field), only arguments for that field are shown.
 If no field is specified, all arguments for all fields are shown.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if argsRequiredFilter && argsNullableFilter {
-			return fmt.Errorf("--required and --nullable cannot be used together")
-		}
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runArgs(cmd, args, opts)
+		},
+	}
 
-		var argsNameRegex *regexp.Regexp
-		if argsNameRegexFilter != "" {
-			var err error
-			argsNameRegex, err = regexp.Compile(argsNameRegexFilter)
-			if err != nil {
-				return fmt.Errorf("invalid regex pattern for --name-regex: %w", err)
-			}
-		}
+	cmd.Flags().BoolVar(&opts.deprecated, "deprecated", false, "Filter to only show deprecated arguments")
+	cmd.Flags().StringVar(&opts.typeFilter, "type", "", "Filter to arguments of the given type")
+	cmd.Flags().BoolVar(&opts.required, "required", false, "Filter to only show required (non-null) arguments")
+	cmd.Flags().BoolVar(&opts.nullable, "nullable", false, "Filter to only show nullable arguments")
+	cmd.Flags().StringVar(&opts.name, "name", "", "Filter arguments by name using a glob pattern (e.g., *Id, first*)")
+	cmd.Flags().StringVar(&opts.nameRegex, "name-regex", "", "Filter arguments by name using a regex pattern")
+	cmd.Flags().BoolVar(&opts.hasDescription, "has-description", false, "Filter to only show arguments that have a description")
 
-		schema, err := loadCliForSchema()
-		if err != nil {
-			return err
-		}
-
-		var argInfos []ArgInfo
-
-		if len(args) == 0 {
-			// List all arguments from all fields
-			for _, graphqlType := range schema.Types {
-				for _, field := range graphqlType.Fields {
-					for _, arg := range field.Arguments {
-						if argsDeprecatedFilter && !isArgDeprecated(arg) {
-							continue
-						}
-						if !matchesArgFilters(arg) {
-							continue
-						}
-						if argsNameFilter != "" {
-							matched, _ := filepath.Match(argsNameFilter, arg.Name)
-							if !matched {
-								continue
-							}
-						}
-						if argsNameRegex != nil && !argsNameRegex.MatchString(arg.Name) {
-							continue
-						}
-						info := argToInfo(arg)
-						info.TypeName = graphqlType.Name
-						info.FieldName = field.Name
-						argInfos = append(argInfos, info)
-					}
-				}
-			}
-		} else {
-			// Parse Type.field format
-			fieldPath := args[0]
-			parts := strings.Split(fieldPath, ".")
-			if len(parts) != 2 {
-				return fmt.Errorf("field must be specified as Type.field (e.g., Query.user)")
-			}
-			typeName, fieldName := parts[0], parts[1]
-
-			if err := validateTypeExists(schema, typeName, "type"); err != nil {
-				return err
-			}
-			graphqlType := schema.Types[typeName]
-
-			var field *ast.FieldDefinition
-			for _, f := range graphqlType.Fields {
-				if f.Name == fieldName {
-					field = f
-					break
-				}
-			}
-
-			if field == nil {
-				var fieldNames []string
-				for _, f := range graphqlType.Fields {
-					fieldNames = append(fieldNames, f.Name)
-				}
-				if suggestion := findClosest(fieldName, fieldNames); suggestion != "" {
-					return fmt.Errorf("field '%s' does not exist on type '%s', did you mean '%s'?", fieldName, typeName, suggestion)
-				}
-				return fmt.Errorf("field '%s' does not exist on type '%s'", fieldName, typeName)
-			}
-
-			for _, arg := range field.Arguments {
-				if argsDeprecatedFilter && !isArgDeprecated(arg) {
-					continue
-				}
-				if !matchesArgFilters(arg) {
-					continue
-				}
-				if argsNameFilter != "" {
-					matched, _ := filepath.Match(argsNameFilter, arg.Name)
-					if !matched {
-						continue
-					}
-				}
-				if argsNameRegex != nil && !argsNameRegex.MatchString(arg.Name) {
-					continue
-				}
-				argInfos = append(argInfos, argToInfo(arg))
-			}
-		}
-
-		if len(argInfos) == 0 {
-			fmt.Fprintln(cmd.ErrOrStderr(), "No arguments found that match the filters.")
-		}
-
-		renderer := render.Renderer[ArgInfo]{
-			Data:         argInfos,
-			TextFormat:   formatArgText,
-			PrettyFormat: formatArgsPretty,
-		}
-
-		output, err := renderer.Render(outputFormat)
-		if err != nil {
-			return fmt.Errorf("error rendering output: %w", err)
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), output)
-		return nil
-	},
+	return cmd
 }
 
-func init() {
-	rootCmd.AddCommand(argsCmd)
+func runArgs(cmd *cobra.Command, args []string, opts *argsOptions) error {
+	if opts.required && opts.nullable {
+		return fmt.Errorf("--required and --nullable cannot be used together")
+	}
 
-	argsCmd.Flags().BoolVar(&argsDeprecatedFilter, "deprecated", false, "Filter to only show deprecated arguments")
-	argsCmd.Flags().StringVar(&argsTypeFilter, "type", "", "Filter to arguments of the given type")
-	argsCmd.Flags().BoolVar(&argsRequiredFilter, "required", false, "Filter to only show required (non-null) arguments")
-	argsCmd.Flags().BoolVar(&argsNullableFilter, "nullable", false, "Filter to only show nullable arguments")
-	argsCmd.Flags().StringVar(&argsNameFilter, "name", "", "Filter arguments by name using a glob pattern (e.g., *Id, first*)")
-	argsCmd.Flags().StringVar(&argsNameRegexFilter, "name-regex", "", "Filter arguments by name using a regex pattern")
-	argsCmd.Flags().BoolVar(&argsHasDescriptionFilter, "has-description", false, "Filter to only show arguments that have a description")
+	var nameRegex *regexp.Regexp
+	if opts.nameRegex != "" {
+		var err error
+		nameRegex, err = regexp.Compile(opts.nameRegex)
+		if err != nil {
+			return fmt.Errorf("invalid regex pattern for --name-regex: %w", err)
+		}
+	}
+
+	schema, err := loadCliForSchema()
+	if err != nil {
+		return err
+	}
+
+	var argInfos []ArgInfo
+
+	if len(args) == 0 {
+		// List all arguments from all fields
+		for _, graphqlType := range schema.Types {
+			for _, field := range graphqlType.Fields {
+				for _, arg := range field.Arguments {
+					if opts.deprecated && !isArgDeprecated(arg) {
+						continue
+					}
+					if !matchesArgFilters(arg, opts) {
+						continue
+					}
+					if opts.name != "" {
+						matched, _ := filepath.Match(opts.name, arg.Name)
+						if !matched {
+							continue
+						}
+					}
+					if nameRegex != nil && !nameRegex.MatchString(arg.Name) {
+						continue
+					}
+					info := argToInfo(arg)
+					info.TypeName = graphqlType.Name
+					info.FieldName = field.Name
+					argInfos = append(argInfos, info)
+				}
+			}
+		}
+	} else {
+		// Parse Type.field format
+		fieldPath := args[0]
+		parts := strings.Split(fieldPath, ".")
+		if len(parts) != 2 {
+			return fmt.Errorf("field must be specified as Type.field (e.g., Query.user)")
+		}
+		typeName, fieldName := parts[0], parts[1]
+
+		if err := validateTypeExists(schema, typeName, "type"); err != nil {
+			return err
+		}
+		graphqlType := schema.Types[typeName]
+
+		var field *ast.FieldDefinition
+		for _, f := range graphqlType.Fields {
+			if f.Name == fieldName {
+				field = f
+				break
+			}
+		}
+
+		if field == nil {
+			var fieldNames []string
+			for _, f := range graphqlType.Fields {
+				fieldNames = append(fieldNames, f.Name)
+			}
+			if suggestion := findClosest(fieldName, fieldNames); suggestion != "" {
+				return fmt.Errorf("field '%s' does not exist on type '%s', did you mean '%s'?", fieldName, typeName, suggestion)
+			}
+			return fmt.Errorf("field '%s' does not exist on type '%s'", fieldName, typeName)
+		}
+
+		for _, arg := range field.Arguments {
+			if opts.deprecated && !isArgDeprecated(arg) {
+				continue
+			}
+			if !matchesArgFilters(arg, opts) {
+				continue
+			}
+			if opts.name != "" {
+				matched, _ := filepath.Match(opts.name, arg.Name)
+				if !matched {
+					continue
+				}
+			}
+			if nameRegex != nil && !nameRegex.MatchString(arg.Name) {
+				continue
+			}
+			argInfos = append(argInfos, argToInfo(arg))
+		}
+	}
+
+	if len(argInfos) == 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "No arguments found that match the filters.")
+	}
+
+	renderer := render.Renderer[ArgInfo]{
+		Data:         argInfos,
+		TextFormat:   formatArgText,
+		PrettyFormat: formatArgsPretty,
+	}
+
+	output, err := renderer.Render(outputFormat)
+	if err != nil {
+		return fmt.Errorf("error rendering output: %w", err)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), output)
+	return nil
 }

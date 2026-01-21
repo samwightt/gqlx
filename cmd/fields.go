@@ -4,9 +4,7 @@ Copyright © 2026 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
-	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -14,53 +12,18 @@ import (
 
 	"github.com/samwightt/gqlx/pkg/render"
 	"github.com/spf13/cobra"
-	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
-	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
-func loadSchema() (*ast.Schema, error) {
-	path, err := filepath.Abs(schemaFilePath)
-	if err != nil {
-		return nil, err
-	}
-
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	strVal := string(bytes)
-
-	fileName := filepath.Base(path)
-	source := ast.Source{
-		Input: strVal,
-		Name:  fileName,
-	}
-	schema, err := gqlparser.LoadSchema(&source)
-	if err != nil {
-		return nil, err
-	}
-
-	return schema, nil
-}
-
-func loadCliForSchema() (*ast.Schema, error) {
-	schema, err := loadSchema()
-
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("schema file does not exist: %s", schemaFilePath)
-		}
-		var parsingError *gqlerror.Error
-
-		if errors.As(err, &parsingError) {
-			return nil, fmt.Errorf("GraphQL schema parsing error: %v", parsingError)
-		}
-
-		return nil, fmt.Errorf("unexpected error: %v", err)
-	}
-
-	return schema, nil
+type fieldsOptions struct {
+	deprecated     bool
+	hasArg         []string
+	returns        string
+	required       bool
+	nullable       bool
+	name           string
+	nameRegex      string
+	hasDescription bool
 }
 
 func fieldToInfo(fieldDef *ast.FieldDefinition) FieldInfo {
@@ -139,20 +102,11 @@ func formatFieldsPretty(fields []FieldInfo) string {
 	return t.String()
 }
 
-var deprecatedFilter bool
-var hasArgFilter []string
-var returnsFilter string
-var requiredFilter bool
-var nullableFilter bool
-var nameFilter string
-var nameRegexFilter string
-var hasDescriptionFilter bool
-
 func isFieldDeprecated(field *ast.FieldDefinition) bool {
 	return field.Directives.ForName("deprecated") != nil
 }
 
-func matchesHasArgFilter(field *ast.FieldDefinition) bool {
+func matchesHasArgFilter(field *ast.FieldDefinition, hasArgFilter []string) bool {
 	if len(hasArgFilter) == 0 {
 		return true
 	}
@@ -171,29 +125,31 @@ func matchesHasArgFilter(field *ast.FieldDefinition) bool {
 	return true
 }
 
-// fieldsCmd represents the fields command
-var fieldsCmd = &cobra.Command{
-	Use:   "fields [type]",
-	Short: "Lists fields on a type or across all types",
-	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		schema, err := loadSchema()
-		if err != nil {
-			return nil, cobra.ShellCompDirectiveError
-		}
+func NewFieldsCmd() *cobra.Command {
+	opts := &fieldsOptions{}
 
-		outputNames := []string{}
-		for key := range schema.Types {
-			if strings.Contains(strings.ToLower(key), strings.ToLower(toComplete)) {
-				outputNames = append(outputNames, key)
+	cmd := &cobra.Command{
+		Use:   "fields [type]",
+		Short: "Lists fields on a type or across all types",
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			schema, err := loadSchema()
+			if err != nil {
+				return nil, cobra.ShellCompDirectiveError
 			}
-		}
 
-		sort.Strings(outputNames)
+			outputNames := []string{}
+			for key := range schema.Types {
+				if strings.Contains(strings.ToLower(key), strings.ToLower(toComplete)) {
+					outputNames = append(outputNames, key)
+				}
+			}
 
-		return outputNames, cobra.ShellCompDirectiveNoFileComp
-	},
-	Args: cobra.MaximumNArgs(1),
-	Long: `Lists fields on a type or across all types with optional filtering.
+			sort.Strings(outputNames)
+
+			return outputNames, cobra.ShellCompDirectiveNoFileComp
+		},
+		Args: cobra.MaximumNArgs(1),
+		Long: `Lists fields on a type or across all types with optional filtering.
 
 If a type is specified, shows fields for that type only.
 If no type is specified, shows all fields prefixed with their type (User.id, Post.title, etc).
@@ -204,7 +160,7 @@ Output formats:
   pretty  Formatted table with columns (default in terminal)
 
 Multiple filters can be combined and are applied with AND logic.`,
-	Example: `  # See all fields on a type
+		Example: `  # See all fields on a type
   gqlx fields User
 
   # Find deprecated fields
@@ -221,92 +177,68 @@ Multiple filters can be combined and are applied with AND logic.`,
 
   # Find fields matching a regex pattern
   gqlx fields --name-regex "^(get|fetch)"`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if requiredFilter && nullableFilter {
-			return fmt.Errorf("--required and --nullable cannot be used together")
-		}
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runFields(cmd, args, opts)
+		},
+	}
 
-		var nameRegex *regexp.Regexp
-		if nameRegexFilter != "" {
-			var err error
-			nameRegex, err = regexp.Compile(nameRegexFilter)
-			if err != nil {
-				return fmt.Errorf("invalid regex pattern for --name-regex: %w", err)
-			}
-		}
+	cmd.Flags().BoolVar(&opts.deprecated, "deprecated", false, "Filter to only show deprecated fields")
+	cmd.Flags().StringArrayVar(&opts.hasArg, "has-arg", nil, "Filter to fields that have the given argument (can be specified multiple times)")
+	cmd.Flags().StringVar(&opts.returns, "returns", "", "Filter to fields that return the given type")
+	cmd.Flags().BoolVar(&opts.required, "required", false, "Filter to only show required (non-null) fields")
+	cmd.Flags().BoolVar(&opts.nullable, "nullable", false, "Filter to only show nullable fields")
+	cmd.Flags().StringVar(&opts.name, "name", "", "Filter fields by name using a glob pattern (e.g., *Id, get*)")
+	cmd.Flags().StringVar(&opts.nameRegex, "name-regex", "", "Filter fields by name using a regex pattern")
+	cmd.Flags().BoolVar(&opts.hasDescription, "has-description", false, "Filter to only show fields that have a description")
 
-		schema, err := loadCliForSchema()
+	return cmd
+}
+
+func runFields(cmd *cobra.Command, args []string, opts *fieldsOptions) error {
+	if opts.required && opts.nullable {
+		return fmt.Errorf("--required and --nullable cannot be used together")
+	}
+
+	var nameRegex *regexp.Regexp
+	if opts.nameRegex != "" {
+		var err error
+		nameRegex, err = regexp.Compile(opts.nameRegex)
 		if err != nil {
-			return err
+			return fmt.Errorf("invalid regex pattern for --name-regex: %w", err)
 		}
+	}
 
-		var fields []FieldInfo
+	schema, err := loadCliForSchema()
+	if err != nil {
+		return err
+	}
 
-		if len(args) == 0 {
-			// List all fields from all types
-			for _, graphqlType := range schema.Types {
-				for _, field := range graphqlType.Fields {
-					if deprecatedFilter && !isFieldDeprecated(field) {
-						continue
-					}
-					if !matchesHasArgFilter(field) {
-						continue
-					}
-					if returnsFilter != "" && getBaseTypeName(field.Type) != returnsFilter {
-						continue
-					}
-					if requiredFilter && !field.Type.NonNull {
-						continue
-					}
-					if nullableFilter && field.Type.NonNull {
-						continue
-					}
-					if hasDescriptionFilter && field.Description == "" {
-						continue
-					}
-					if nameFilter != "" {
-						matched, _ := filepath.Match(nameFilter, field.Name)
-						if !matched {
-							continue
-						}
-					}
-					if nameRegex != nil && !nameRegex.MatchString(field.Name) {
-						continue
-					}
-					info := fieldToInfo(field)
-					info.TypeName = graphqlType.Name
-					fields = append(fields, info)
-				}
-			}
-		} else {
-			// List fields from specific type
-			searchString := args[0]
-			if err := validateTypeExists(schema, searchString, "type"); err != nil {
-				return err
-			}
-			graphqlType := schema.Types[searchString]
+	var fields []FieldInfo
 
+	if len(args) == 0 {
+		// List all fields from all types
+		for _, graphqlType := range schema.Types {
 			for _, field := range graphqlType.Fields {
-				if deprecatedFilter && !isFieldDeprecated(field) {
+				if opts.deprecated && !isFieldDeprecated(field) {
 					continue
 				}
-				if !matchesHasArgFilter(field) {
+				if !matchesHasArgFilter(field, opts.hasArg) {
 					continue
 				}
-				if returnsFilter != "" && getBaseTypeName(field.Type) != returnsFilter {
+				if opts.returns != "" && getBaseTypeName(field.Type) != opts.returns {
 					continue
 				}
-				if requiredFilter && !field.Type.NonNull {
+				if opts.required && !field.Type.NonNull {
 					continue
 				}
-				if nullableFilter && field.Type.NonNull {
+				if opts.nullable && field.Type.NonNull {
 					continue
 				}
-				if hasDescriptionFilter && field.Description == "" {
+				if opts.hasDescription && field.Description == "" {
 					continue
 				}
-				if nameFilter != "" {
-					matched, _ := filepath.Match(nameFilter, field.Name)
+				if opts.name != "" {
+					matched, _ := filepath.Match(opts.name, field.Name)
 					if !matched {
 						continue
 					}
@@ -314,38 +246,65 @@ Multiple filters can be combined and are applied with AND logic.`,
 				if nameRegex != nil && !nameRegex.MatchString(field.Name) {
 					continue
 				}
-				fields = append(fields, fieldToInfo(field))
+				info := fieldToInfo(field)
+				info.TypeName = graphqlType.Name
+				fields = append(fields, info)
 			}
 		}
-
-		if len(fields) == 0 {
-			fmt.Fprintln(cmd.ErrOrStderr(), "No fields found that match the filters.")
+	} else {
+		// List fields from specific type
+		searchString := args[0]
+		if err := validateTypeExists(schema, searchString, "type"); err != nil {
+			return err
 		}
+		graphqlType := schema.Types[searchString]
 
-		renderer := render.Renderer[FieldInfo]{
-			Data:         fields,
-			TextFormat:   formatFieldText,
-			PrettyFormat: formatFieldsPretty,
+		for _, field := range graphqlType.Fields {
+			if opts.deprecated && !isFieldDeprecated(field) {
+				continue
+			}
+			if !matchesHasArgFilter(field, opts.hasArg) {
+				continue
+			}
+			if opts.returns != "" && getBaseTypeName(field.Type) != opts.returns {
+				continue
+			}
+			if opts.required && !field.Type.NonNull {
+				continue
+			}
+			if opts.nullable && field.Type.NonNull {
+				continue
+			}
+			if opts.hasDescription && field.Description == "" {
+				continue
+			}
+			if opts.name != "" {
+				matched, _ := filepath.Match(opts.name, field.Name)
+				if !matched {
+					continue
+				}
+			}
+			if nameRegex != nil && !nameRegex.MatchString(field.Name) {
+				continue
+			}
+			fields = append(fields, fieldToInfo(field))
 		}
+	}
 
-		output, err := renderer.Render(outputFormat)
-		if err != nil {
-			return fmt.Errorf("error rendering output: %w", err)
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), output)
-		return nil
-	},
-}
+	if len(fields) == 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "No fields found that match the filters.")
+	}
 
-func init() {
-	rootCmd.AddCommand(fieldsCmd)
+	renderer := render.Renderer[FieldInfo]{
+		Data:         fields,
+		TextFormat:   formatFieldText,
+		PrettyFormat: formatFieldsPretty,
+	}
 
-	fieldsCmd.Flags().BoolVar(&deprecatedFilter, "deprecated", false, "Filter to only show deprecated fields")
-	fieldsCmd.Flags().StringArrayVar(&hasArgFilter, "has-arg", nil, "Filter to fields that have the given argument (can be specified multiple times)")
-	fieldsCmd.Flags().StringVar(&returnsFilter, "returns", "", "Filter to fields that return the given type")
-	fieldsCmd.Flags().BoolVar(&requiredFilter, "required", false, "Filter to only show required (non-null) fields")
-	fieldsCmd.Flags().BoolVar(&nullableFilter, "nullable", false, "Filter to only show nullable fields")
-	fieldsCmd.Flags().StringVar(&nameFilter, "name", "", "Filter fields by name using a glob pattern (e.g., *Id, get*)")
-	fieldsCmd.Flags().StringVar(&nameRegexFilter, "name-regex", "", "Filter fields by name using a regex pattern")
-	fieldsCmd.Flags().BoolVar(&hasDescriptionFilter, "has-description", false, "Filter to only show fields that have a description")
+	output, err := renderer.Render(outputFormat)
+	if err != nil {
+		return fmt.Errorf("error rendering output: %w", err)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), output)
+	return nil
 }

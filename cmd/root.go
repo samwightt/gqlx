@@ -12,11 +12,25 @@ import (
 	"golang.org/x/term"
 )
 
-// rootCmd represents the base command when called without any subcommands
-var rootCmd = &cobra.Command{
-	Use:   "gqlx",
-	Short: "Search and explore GraphQL schema files by structure, not just text",
-	Long: `gqlx is a tool for searching GraphQL schema files by their structure.
+var (
+	schemaFilePath string
+	outputFormat   render.Format
+)
+
+func formatFlag() string {
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		return string(render.FormatPretty)
+	}
+	return string(render.FormatText)
+}
+
+// NewRootCmd creates and returns the root command with all subcommands attached.
+// This function creates a fresh command tree, ensuring no state leaks between invocations.
+func NewRootCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "gqlx",
+		Short: "Search and explore GraphQL schema files by structure, not just text",
+		Long: `gqlx is a tool for searching GraphQL schema files by their structure.
 It understands the syntax in .graphql files and lets you explore using GraphQL concepts:
 what interfaces a type implements, what a field returns, whether arguments are required, etc.
 It's grep for GraphQL schema files.
@@ -29,7 +43,7 @@ A different schema file can be specified using -s.
 
 Output can be formatted as pretty tables (default in terminals), plain text
 (default when piping), or JSON for integration with other tools.`,
-	Example: `  # List all types in the schema
+		Example: `  # List all types in the schema
   gqlx types
 
   # Find all types used in Query fields that implement Node interface
@@ -46,77 +60,38 @@ Output can be formatted as pretty tables (default in terminals), plain text
 
   # Pipe JSON output to other tools
   gqlx types -f json | jq '.[].name'`,
-}
-
-var (
-	schemaFilePath string
-	outputFormat   render.Format
-)
-
-func formatFlag() string {
-	if term.IsTerminal(int(os.Stdout.Fd())) {
-		return string(render.FormatPretty)
 	}
-	return string(render.FormatText)
+
+	// Persistent flags
+	cmd.PersistentFlags().StringVarP(&schemaFilePath, "schema", "s", "schema.graphql", "File path of GraphQL schema")
+
+	var formatStr string
+	cmd.PersistentFlags().StringVarP(&formatStr, "format", "f", formatFlag(), "Output format: json, text, pretty (default: pretty if interactive, text otherwise)")
+
+	cmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		var err error
+		outputFormat, err = render.ParseFormat(formatStr)
+		return err
+	}
+
+	// Add all subcommands
+	cmd.AddCommand(NewTypesCmd())
+	cmd.AddCommand(NewFieldsCmd())
+	cmd.AddCommand(NewArgsCmd())
+	cmd.AddCommand(NewPathsCmd())
+	cmd.AddCommand(NewValuesCmd())
+	cmd.AddCommand(NewReferencesCmd())
+	cmd.AddCommand(NewValidateCmd())
+
+	return cmd
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	err := rootCmd.Execute()
-	if err != nil {
+	if err := NewRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
-}
-
-// ResetFlags resets command-specific flags to their default values.
-// This is useful for testing to avoid state leaking between tests.
-func ResetFlags() {
-	// types command flags
-	implementsFilter = ""
-	hasFieldFilter = nil
-	kindFilter = nil
-	usedByFilter = nil
-	usedByAnyFilter = nil
-	notUsedByFilter = nil
-	notUsedByAllFilter = nil
-	typesNameFilter = ""
-	typesNameRegexFilter = ""
-	typesHasDescriptionFilter = false
-	scalarFilter = false
-	typeFilter = false
-	interfaceFilter = false
-	unionFilter = false
-	enumFilter = false
-	inputFilter = false
-	// fields command flags
-	deprecatedFilter = false
-	hasArgFilter = nil
-	returnsFilter = ""
-	requiredFilter = false
-	nullableFilter = false
-	nameFilter = ""
-	nameRegexFilter = ""
-	hasDescriptionFilter = false
-	// args command flags
-	argsDeprecatedFilter = false
-	argsTypeFilter = ""
-	argsRequiredFilter = false
-	argsNullableFilter = false
-	argsNameFilter = ""
-	argsNameRegexFilter = ""
-	argsHasDescriptionFilter = false
-	// paths command flags
-	pathsMaxDepth = 5
-	pathsFromType = ""
-	pathsShortestOnly = false
-	pathsThroughType = ""
-	// values command flags
-	valuesDeprecatedFilter = false
-	valuesHasDescriptionFilter = false
-	// references command flags
-	refsKindFilter = ""
-	refsInTypeFilter = ""
 }
 
 // ExecuteWithArgs runs the CLI with the given arguments and returns stdout, stderr, and any error.
@@ -128,42 +103,20 @@ func ExecuteWithArgs(args []string) (stdout string, stderr string, err error) {
 // ExecuteWithArgsAndStdin runs the CLI with the given arguments and stdin, returns stdout, stderr, and any error.
 // This is useful for testing commands that read from stdin.
 func ExecuteWithArgsAndStdin(args []string, stdin *bytes.Buffer) (stdout string, stderr string, err error) {
-	// Reset command-specific flags to avoid state leaking between tests
-	ResetFlags()
+	// Create a fresh command tree - no need for ResetFlags() anymore!
+	cmd := NewRootCmd()
 
 	stdoutBuf := new(bytes.Buffer)
 	stderrBuf := new(bytes.Buffer)
 
-	rootCmd.SetOut(stdoutBuf)
-	rootCmd.SetErr(stderrBuf)
-	rootCmd.SetArgs(args)
+	cmd.SetOut(stdoutBuf)
+	cmd.SetErr(stderrBuf)
+	cmd.SetArgs(args)
 	if stdin != nil {
-		rootCmd.SetIn(stdin)
+		cmd.SetIn(stdin)
 	}
 
-	err = rootCmd.Execute()
+	err = cmd.Execute()
 
 	return stdoutBuf.String(), stderrBuf.String(), err
-}
-
-func init() {
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.gqlx.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	// rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
-	rootCmd.PersistentFlags().StringVarP(&schemaFilePath, "schema", "s", "schema.graphql", "File path of GraphQL schema")
-
-	var formatStr string
-	rootCmd.PersistentFlags().StringVarP(&formatStr, "format", "f", formatFlag(), "Output format: json, text, pretty (default: pretty if interactive, text otherwise)")
-
-	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
-		var err error
-		outputFormat, err = render.ParseFormat(formatStr)
-		return err
-	}
 }

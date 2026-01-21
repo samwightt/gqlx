@@ -14,10 +14,12 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
-var pathsMaxDepth int
-var pathsFromType string
-var pathsShortestOnly bool
-var pathsThroughType string
+type pathsOptions struct {
+	maxDepth     int
+	fromType     string
+	shortestOnly bool
+	throughType  string
+}
 
 func formatPathStep(step pathStep) string {
 	if step.hasArgs {
@@ -147,94 +149,101 @@ func findPaths(schema *ast.Schema, fromType string, targetType string, maxDepth 
 	return results
 }
 
-// pathsCmd represents the paths command
-var pathsCmd = &cobra.Command{
-	Use:   "paths <type>",
-	Short: "Lists all paths from Query to a given type.",
-	Args:  cobra.ExactArgs(1),
-	Long: `Lists all possible paths from a root type to reach a given type.
+func NewPathsCmd() *cobra.Command {
+	opts := &pathsOptions{
+		maxDepth: 5,
+	}
+
+	cmd := &cobra.Command{
+		Use:   "paths <type>",
+		Short: "Lists all paths from Query to a given type.",
+		Args:  cobra.ExactArgs(1),
+		Long: `Lists all possible paths from a root type to reach a given type.
 
 By default, searches from Query. Use --from to start from a different type.
 Use --shortest to only show the shortest path(s).
 
 For example, if User can be reached via Query.user(id: ID!) or via
 Query.viewer -> Viewer.friends, both paths will be shown.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		targetType := args[0]
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPaths(cmd, args, opts)
+		},
+	}
 
-		schema, err := loadCliForSchema()
-		if err != nil {
-			return err
-		}
+	cmd.Flags().IntVar(&opts.maxDepth, "max-depth", 5, "Maximum depth to search for paths")
+	cmd.Flags().StringVar(&opts.fromType, "from", "", "Type to start searching from (default: Query)")
+	cmd.Flags().BoolVar(&opts.shortestOnly, "shortest", false, "Only show the shortest path(s)")
+	cmd.Flags().StringVar(&opts.throughType, "through", "", "Only show paths that pass through the given type")
 
-		// Validate target type exists
-		if err := validateTypeExists(schema, targetType, "type"); err != nil {
-			return err
-		}
-
-		// Validate from type exists
-		fromType := pathsFromType
-		if fromType == "" {
-			fromType = "Query"
-		}
-		if err := validateTypeExists(schema, fromType, "type"); err != nil {
-			return err
-		}
-
-		// Validate through type exists if specified
-		if pathsThroughType != "" {
-			if err := validateTypeExists(schema, pathsThroughType, "type"); err != nil {
-				return err
-			}
-		}
-
-		paths := findPaths(schema, fromType, targetType, pathsMaxDepth)
-
-		// Filter to paths through specific type if requested
-		if pathsThroughType != "" {
-			paths = filterSlice(paths, func(p PathInfo) bool {
-				return strings.Contains(p.Path, pathsThroughType+".")
-			})
-		}
-
-		// Filter to shortest paths if requested
-		if pathsShortestOnly && len(paths) > 0 {
-			minDepth := len(strings.Split(paths[0].Path, " -> "))
-			for _, p := range paths {
-				depth := len(strings.Split(p.Path, " -> "))
-				if depth < minDepth {
-					minDepth = depth
-				}
-			}
-			paths = filterSlice(paths, func(p PathInfo) bool {
-				return len(strings.Split(p.Path, " -> ")) == minDepth
-			})
-		}
-
-		if len(paths) == 0 {
-			fmt.Fprintln(cmd.ErrOrStderr(), "No paths found that match the filters.")
-		}
-
-		renderer := render.Renderer[PathInfo]{
-			Data:         paths,
-			TextFormat:   formatPathText,
-			PrettyFormat: formatPathsPretty,
-		}
-
-		output, err := renderer.Render(outputFormat)
-		if err != nil {
-			return fmt.Errorf("error rendering output: %w", err)
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), output)
-		return nil
-	},
+	return cmd
 }
 
-func init() {
-	rootCmd.AddCommand(pathsCmd)
+func runPaths(cmd *cobra.Command, args []string, opts *pathsOptions) error {
+	targetType := args[0]
 
-	pathsCmd.Flags().IntVar(&pathsMaxDepth, "max-depth", 5, "Maximum depth to search for paths")
-	pathsCmd.Flags().StringVar(&pathsFromType, "from", "", "Type to start searching from (default: Query)")
-	pathsCmd.Flags().BoolVar(&pathsShortestOnly, "shortest", false, "Only show the shortest path(s)")
-	pathsCmd.Flags().StringVar(&pathsThroughType, "through", "", "Only show paths that pass through the given type")
+	schema, err := loadCliForSchema()
+	if err != nil {
+		return err
+	}
+
+	// Validate target type exists
+	if err := validateTypeExists(schema, targetType, "type"); err != nil {
+		return err
+	}
+
+	// Validate from type exists
+	fromType := opts.fromType
+	if fromType == "" {
+		fromType = "Query"
+	}
+	if err := validateTypeExists(schema, fromType, "type"); err != nil {
+		return err
+	}
+
+	// Validate through type exists if specified
+	if opts.throughType != "" {
+		if err := validateTypeExists(schema, opts.throughType, "type"); err != nil {
+			return err
+		}
+	}
+
+	paths := findPaths(schema, fromType, targetType, opts.maxDepth)
+
+	// Filter to paths through specific type if requested
+	if opts.throughType != "" {
+		paths = filterSlice(paths, func(p PathInfo) bool {
+			return strings.Contains(p.Path, opts.throughType+".")
+		})
+	}
+
+	// Filter to shortest paths if requested
+	if opts.shortestOnly && len(paths) > 0 {
+		minDepth := len(strings.Split(paths[0].Path, " -> "))
+		for _, p := range paths {
+			depth := len(strings.Split(p.Path, " -> "))
+			if depth < minDepth {
+				minDepth = depth
+			}
+		}
+		paths = filterSlice(paths, func(p PathInfo) bool {
+			return len(strings.Split(p.Path, " -> ")) == minDepth
+		})
+	}
+
+	if len(paths) == 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "No paths found that match the filters.")
+	}
+
+	renderer := render.Renderer[PathInfo]{
+		Data:         paths,
+		TextFormat:   formatPathText,
+		PrettyFormat: formatPathsPretty,
+	}
+
+	output, err := renderer.Render(outputFormat)
+	if err != nil {
+		return fmt.Errorf("error rendering output: %w", err)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), output)
+	return nil
 }

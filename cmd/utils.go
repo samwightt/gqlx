@@ -1,12 +1,17 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/agnivade/levenshtein"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 var tableStyle = lipgloss.NewStyle().PaddingRight(1)
@@ -85,4 +90,48 @@ func filterSlice[T any](items []T, predicate func(T) bool) []T {
 		}
 	}
 	return result
+}
+
+func loadSchema() (*ast.Schema, error) {
+	path, err := filepath.Abs(schemaFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	strVal := string(bytes)
+
+	fileName := filepath.Base(path)
+	source := ast.Source{
+		Input: strVal,
+		Name:  fileName,
+	}
+	schema, err := gqlparser.LoadSchema(&source)
+	if err != nil {
+		return nil, err
+	}
+
+	return schema, nil
+}
+
+func loadCliForSchema() (*ast.Schema, error) {
+	schema, err := loadSchema()
+
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("schema file does not exist: %s", schemaFilePath)
+		}
+		var parsingError *gqlerror.Error
+
+		if errors.As(err, &parsingError) {
+			return nil, fmt.Errorf("GraphQL schema parsing error: %v", parsingError)
+		}
+
+		return nil, fmt.Errorf("unexpected error: %v", err)
+	}
+
+	return schema, nil
 }
