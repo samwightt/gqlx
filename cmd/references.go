@@ -94,28 +94,14 @@ Output formats:
 		}
 
 		// Validate target type exists
-		if schema.Types[targetType] == nil {
-			var typeNames []string
-			for name := range schema.Types {
-				typeNames = append(typeNames, name)
-			}
-			if suggestion := findClosest(targetType, typeNames); suggestion != "" {
-				return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", targetType, suggestion)
-			}
-			return fmt.Errorf("type '%s' does not exist in schema", targetType)
+		if err := validateTypeExists(schema, targetType, "type"); err != nil {
+			return err
 		}
 
 		// Validate --in filter type exists
 		if refsInTypeFilter != "" {
-			if schema.Types[refsInTypeFilter] == nil {
-				var typeNames []string
-				for name := range schema.Types {
-					typeNames = append(typeNames, name)
-				}
-				if suggestion := findClosest(refsInTypeFilter, typeNames); suggestion != "" {
-					return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", refsInTypeFilter, suggestion)
-				}
-				return fmt.Errorf("type '%s' does not exist in schema", refsInTypeFilter)
+			if err := validateTypeExists(schema, refsInTypeFilter, "type"); err != nil {
+				return err
 			}
 		}
 

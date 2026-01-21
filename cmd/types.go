@@ -273,15 +273,8 @@ Multiple filters can be combined and are applied with AND logic.`,
 
 		// Helper to validate type exists and get types used by it
 		validateAndGetUsedBy := func(typeName string) (map[string]bool, error) {
-			if schema.Types[typeName] == nil {
-				var typeNames []string
-				for name := range schema.Types {
-					typeNames = append(typeNames, name)
-				}
-				if suggestion := findClosest(typeName, typeNames); suggestion != "" {
-					return nil, fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", typeName, suggestion)
-				}
-				return nil, fmt.Errorf("type '%s' does not exist in schema", typeName)
+			if err := validateTypeExists(schema, typeName, "type"); err != nil {
+				return nil, err
 			}
 			return getTypesUsedBy(schema, typeName), nil
 		}

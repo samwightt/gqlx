@@ -300,17 +300,10 @@ Multiple filters can be combined and are applied with AND logic.`,
 		} else {
 			// List fields from specific type
 			searchString := args[0]
-			graphqlType := schema.Types[searchString]
-			if graphqlType == nil {
-				var typeNames []string
-				for name := range schema.Types {
-					typeNames = append(typeNames, name)
-				}
-				if suggestion := findClosest(searchString, typeNames); suggestion != "" {
-					return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", searchString, suggestion)
-				}
-				return fmt.Errorf("type '%s' does not exist in schema", searchString)
+			if err := validateTypeExists(schema, searchString, "type"); err != nil {
+				return err
 			}
+			graphqlType := schema.Types[searchString]
 
 			for _, field := range graphqlType.Fields {
 				if deprecatedFilter && !isFieldDeprecated(field) {

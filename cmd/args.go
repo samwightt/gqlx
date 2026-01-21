@@ -184,17 +184,10 @@ If no field is specified, all arguments for all fields are shown.`,
 			}
 			typeName, fieldName := parts[0], parts[1]
 
-			graphqlType := schema.Types[typeName]
-			if graphqlType == nil {
-				var typeNames []string
-				for name := range schema.Types {
-					typeNames = append(typeNames, name)
-				}
-				if suggestion := findClosest(typeName, typeNames); suggestion != "" {
-					return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", typeName, suggestion)
-				}
-				return fmt.Errorf("type '%s' does not exist in schema", typeName)
+			if err := validateTypeExists(schema, typeName, "type"); err != nil {
+				return err
 			}
+			graphqlType := schema.Types[typeName]
 
 			var field *ast.FieldDefinition
 			for _, f := range graphqlType.Fields {

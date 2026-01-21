@@ -178,15 +178,8 @@ Query.viewer -> Viewer.friends, both paths will be shown.`,
 		}
 
 		// Validate target type exists
-		if schema.Types[targetType] == nil {
-			var typeNames []string
-			for name := range schema.Types {
-				typeNames = append(typeNames, name)
-			}
-			if suggestion := findClosest(targetType, typeNames); suggestion != "" {
-				return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", targetType, suggestion)
-			}
-			return fmt.Errorf("type '%s' does not exist in schema", targetType)
+		if err := validateTypeExists(schema, targetType, "type"); err != nil {
+			return err
 		}
 
 		// Validate from type exists
@@ -194,28 +187,14 @@ Query.viewer -> Viewer.friends, both paths will be shown.`,
 		if fromType == "" {
 			fromType = "Query"
 		}
-		if schema.Types[fromType] == nil {
-			var typeNames []string
-			for name := range schema.Types {
-				typeNames = append(typeNames, name)
-			}
-			if suggestion := findClosest(fromType, typeNames); suggestion != "" {
-				return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", fromType, suggestion)
-			}
-			return fmt.Errorf("type '%s' does not exist in schema", fromType)
+		if err := validateTypeExists(schema, fromType, "type"); err != nil {
+			return err
 		}
 
 		// Validate through type exists if specified
 		if pathsThroughType != "" {
-			if schema.Types[pathsThroughType] == nil {
-				var typeNames []string
-				for name := range schema.Types {
-					typeNames = append(typeNames, name)
-				}
-				if suggestion := findClosest(pathsThroughType, typeNames); suggestion != "" {
-					return fmt.Errorf("type '%s' does not exist in schema, did you mean '%s'?", pathsThroughType, suggestion)
-				}
-				return fmt.Errorf("type '%s' does not exist in schema", pathsThroughType)
+			if err := validateTypeExists(schema, pathsThroughType, "type"); err != nil {
+				return err
 			}
 		}
 
