@@ -209,6 +209,41 @@ func matchesHasFieldFilter(t *ast.Definition) bool {
 	return true
 }
 
+// collectUsedBySets validates each type name in the filter list and returns
+// a slice of sets where each set contains the types used by the corresponding filter type.
+func collectUsedBySets(schema *ast.Schema, filterTypes []string) ([]map[string]bool, error) {
+	var sets []map[string]bool
+	for _, typeName := range filterTypes {
+		if err := validateTypeExists(schema, typeName, "type"); err != nil {
+			return nil, err
+		}
+		sets = append(sets, getTypesUsedBy(schema, typeName))
+	}
+	return sets, nil
+}
+
+// isInAllSets returns true if the name is present in ALL of the given sets.
+// Returns true if sets is empty.
+func isInAllSets(name string, sets []map[string]bool) bool {
+	for _, set := range sets {
+		if !set[name] {
+			return false
+		}
+	}
+	return true
+}
+
+// isInAnySets returns true if the name is present in ANY of the given sets.
+// Returns false if sets is empty.
+func isInAnySets(name string, sets []map[string]bool) bool {
+	for _, set := range sets {
+		if set[name] {
+			return true
+		}
+	}
+	return false
+}
+
 // typesCmd represents the types command
 var typesCmd = &cobra.Command{
 	Use:   "types",
@@ -271,49 +306,22 @@ Multiple filters can be combined and are applied with AND logic.`,
 			return err
 		}
 
-		// Helper to validate type exists and get types used by it
-		validateAndGetUsedBy := func(typeName string) (map[string]bool, error) {
-			if err := validateTypeExists(schema, typeName, "type"); err != nil {
-				return nil, err
-			}
-			return getTypesUsedBy(schema, typeName), nil
+		// Collect type sets for all used-by filters
+		usedBySets, err := collectUsedBySets(schema, usedByFilter)
+		if err != nil {
+			return err
 		}
-
-		// Collect type sets for all filters
-		var usedBySets []map[string]bool
-		for _, typeName := range usedByFilter {
-			usedBy, err := validateAndGetUsedBy(typeName)
-			if err != nil {
-				return err
-			}
-			usedBySets = append(usedBySets, usedBy)
+		usedByAnySets, err := collectUsedBySets(schema, usedByAnyFilter)
+		if err != nil {
+			return err
 		}
-
-		var usedByAnySets []map[string]bool
-		for _, typeName := range usedByAnyFilter {
-			usedBy, err := validateAndGetUsedBy(typeName)
-			if err != nil {
-				return err
-			}
-			usedByAnySets = append(usedByAnySets, usedBy)
+		notUsedBySets, err := collectUsedBySets(schema, notUsedByFilter)
+		if err != nil {
+			return err
 		}
-
-		var notUsedBySets []map[string]bool
-		for _, typeName := range notUsedByFilter {
-			usedBy, err := validateAndGetUsedBy(typeName)
-			if err != nil {
-				return err
-			}
-			notUsedBySets = append(notUsedBySets, usedBy)
-		}
-
-		var notUsedByAllSets []map[string]bool
-		for _, typeName := range notUsedByAllFilter {
-			usedBy, err := validateAndGetUsedBy(typeName)
-			if err != nil {
-				return err
-			}
-			notUsedByAllSets = append(notUsedByAllSets, usedBy)
+		notUsedByAllSets, err := collectUsedBySets(schema, notUsedByAllFilter)
+		if err != nil {
+			return err
 		}
 
 		var types []TypeInfo
@@ -329,59 +337,23 @@ Multiple filters can be combined and are applied with AND logic.`,
 			}
 
 			// --used-by (AND): must be used by ALL specified types
-			if len(usedBySets) > 0 {
-				usedByAll := true
-				for _, usedBySet := range usedBySets {
-					if !usedBySet[graphqlType.Name] {
-						usedByAll = false
-						break
-					}
-				}
-				if !usedByAll {
-					continue
-				}
+			if len(usedBySets) > 0 && !isInAllSets(graphqlType.Name, usedBySets) {
+				continue
 			}
 
 			// --used-by-any (OR): must be used by ANY of the specified types
-			if len(usedByAnySets) > 0 {
-				usedByAny := false
-				for _, usedBySet := range usedByAnySets {
-					if usedBySet[graphqlType.Name] {
-						usedByAny = true
-						break
-					}
-				}
-				if !usedByAny {
-					continue
-				}
+			if len(usedByAnySets) > 0 && !isInAnySets(graphqlType.Name, usedByAnySets) {
+				continue
 			}
 
 			// --not-used-by (AND): must NOT be used by ANY of the specified types
-			if len(notUsedBySets) > 0 {
-				usedByAny := false
-				for _, usedBySet := range notUsedBySets {
-					if usedBySet[graphqlType.Name] {
-						usedByAny = true
-						break
-					}
-				}
-				if usedByAny {
-					continue
-				}
+			if len(notUsedBySets) > 0 && isInAnySets(graphqlType.Name, notUsedBySets) {
+				continue
 			}
 
 			// --not-used-by-all (OR): exclude only if used by ALL specified types
-			if len(notUsedByAllSets) > 0 {
-				usedByAll := true
-				for _, usedBySet := range notUsedByAllSets {
-					if !usedBySet[graphqlType.Name] {
-						usedByAll = false
-						break
-					}
-				}
-				if usedByAll {
-					continue
-				}
+			if len(notUsedByAllSets) > 0 && isInAllSets(graphqlType.Name, notUsedByAllSets) {
+				continue
 			}
 
 			if typesHasDescriptionFilter && graphqlType.Description == "" {
